@@ -6,8 +6,7 @@ A Python tool for auditing Silent Payments indexer tweak services to determine w
 
 - **Multi-service support**: Audit multiple indexing services simultaneously
 - **Flexible connection methods**: Support for HTTP, RPC, and socket-based RPC services
-- **Extensible architecture**: Easy to add new service implementations
-- **Esplora Cake integration**: Built-in support for Esplora Cake socket RPC
+- **Extensible architecture**: Easy to add new service implementations - blindbit-oracle, esplora-cake, bitcoin-core, electrs supported
 - **Pairwise comparison analysis**: Compare specific service pairs with detailed matching statistics
 - **Range auditing**: Audit single blocks or ranges of blocks
 - **Detailed reporting**: Comprehensive results with statistics and comparisons
@@ -19,26 +18,26 @@ A Python tool for auditing Silent Payments indexer tweak services to determine w
 1. Clone or download this repository
 2. Install dependencies:
    ```bash
-   pip install -r requirements.txt
+   just init
    ```
 
 ## Quick Start
 
-1. **Edit the configuration** (`config.json`) to add your actual service endpoints
+1. **Edit the configuration** (`sample.config.json`) to add your actual service endpoints
 
 2. **Audit a single block**:
    ```bash
-   python main.py audit-block 800000
+   python main.py block 800000
    ```
 
 3. **Audit a range of blocks**:
    ```bash
-   python main.py audit-range 800000 800010
+   python main.py range 800000 800010
    ```
 
 ## Configuration
 
-The auditor uses a JSON configuration file to define the indexing services to audit. Review sample.config.json for example:
+The auditor uses a JSON configuration file to define the indexing services to audit. Review sample.config.json for guidance:
 
 ### Configuration Format
 
@@ -55,7 +54,9 @@ The configuration file defines services and optional pairwise comparison groups:
         "User-Agent": "TweakServiceAuditor/1.0"
       },
       "timeout": 5,
-      "active": true
+      "active": true,
+      "cookie_file": "/path/to/.cookie",
+      "requests_per_second": 100
     },
     {
       "name": "bitcoin-core-local",
@@ -66,7 +67,9 @@ The configuration file defines services and optional pairwise comparison groups:
         "password": "your_rpc_password"
       },
       "timeout": 5,
-      "active": true
+      "active": true,
+      "cookie_file": "/path/to/.cookie",
+      "requests_per_second": 200
     }
   ],
   "service_pairs": [
@@ -90,8 +93,10 @@ The configuration file defines services and optional pairwise comparison groups:
 - `port`: Port number (optional, for socket_rpc services)
 - `auth`: Authentication credentials (optional)
 - `headers`: Custom HTTP headers (optional, HTTP/RPC only)
-- `timeout`: Request timeout in seconds (default: 30)
+- `timeout`: Request timeout in seconds (default: 5)
 - `active`: Whether the service is enabled for auditing (default: true)
+- `cookie_file`: Path to a cookie file for authentication (optional, for Bitcoin Core and similar)
+- `requests_per_second`: Maximum requests per second to this service (optional, default: 200)
 
 **Service Pair Configuration:**
 - `name`: Unique identifier for the comparison pair
@@ -110,7 +115,9 @@ Standard HTTP REST API endpoints:
   "endpoint": "https://api.yourservice.com",
   "headers": {"Authorization": "Bearer token"},
   "timeout": 30,
-  "active": true
+  "active": true,
+  "cookie_file": "/path/to/.cookie",
+  "requests_per_second": 200
 }
 ```
 
@@ -123,7 +130,9 @@ JSON-RPC over HTTP:
   "endpoint": "http://127.0.0.1:8332",
   "auth": {"username": "user", "password": "pass"},
   "timeout": 60,
-  "active": true
+  "active": true,
+  "cookie_file": "/path/to/.cookie",
+  "requests_per_second": 100
 }
 ```
 
@@ -135,7 +144,8 @@ Direct socket connections for Esplora Cake and similar services:
   "service_type": "socket_rpc", 
   "endpoint": "127.0.0.1:60601",
   "timeout": 30,
-  "active": true
+  "active": true,
+  "requests_per_second": 200
 }
 ```
 
@@ -147,9 +157,15 @@ Or with separate host/port:
   "host": "127.0.0.1",
   "port": 60601,
   "timeout": 30,
-  "active": true
+  "active": true,
+  "requests_per_second": 200
 }
 ```
+
+### Defaults
+- `timeout`: 5 seconds if not specified
+- `active`: true if not specified
+- `requests_per_second`: 200 if not specified
 
 ## Usage
 
@@ -177,36 +193,35 @@ python main.py config --validate-config
 
 ```bash
 # Audit single block
-python main.py audit-block 800000
+python main.py block 800000
 
 # Audit with detailed tweak hash output
-python main.py audit-block 800000 --detailed
+python main.py block 800000 --detailed
 
 # Save results to JSON file
-python main.py audit-block 800000 --output results.json
+python main.py block 800000 --output results.json
 
 # Audit with custom config file
-python main.py --config my-config.json audit-block 800000 
+python main.py --config my-config.json block 800000 
 ```
 
 #### Range Auditing
 
 ```bash
 # Audit range of blocks
-python main.py audit-range 800000 800010
+python main.py range 800000 800010
 
 # Audit range with detailed output and save results
-python main.py audit-range 800000 800010 --detailed --output range_results.json
+python main.py range 800000 800010 --detailed --output range_results.json
 
 # Audit large range with verbose logging
-python main.py audit-range 800000 801000 --verbose --output large_audit.json
+python main.py range 800000 801000 --output large_audit.json
 ```
 
 ### Global Options
 
 - `--config, -c`: Specify configuration file path (default: config.json)
 - `--verbose, -v, -vv`: Enable verbose logging for debugging
-#### Sub Options
 - `--detailed, -d`: Show detailed results including individual tweak hashes
 - `--output, -o`: Save results to JSON file for further analysis
 
@@ -406,18 +421,19 @@ tweak-service-auditor/
 ├── service_implementations.py # Concrete service implementations
 ├── config.py                  # Configuration management and validation
 ├── requirements.txt           # Python dependencies
-├── config.json               # Service configuration (user-created)
-└── README.md                 # This documentation
+├── justfile                   # just
+├── config.json                # Service configuration (user-created)
+└── README.md                  # This documentation
 ```
 
 ### Testing Your Setup
 
 ```bash
 # List configured services
-python main.py config --list-services
+just services
 
 # Test audit with verbose logging
-python main.py -v audit-block 800000
+just block 800000 -v
 ```
 
 ## Contributing

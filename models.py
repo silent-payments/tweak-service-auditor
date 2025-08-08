@@ -132,6 +132,15 @@ class AuditResult:
         
         return non_matching
 
+    @property
+    def total_request_time_by_service(self) -> Dict[str, float]:
+        """Sum of request_time for each service (for this block)"""
+        times = {}
+        for result in self.service_results:
+            if result.success:
+                times[result.service_name] = times.get(result.service_name, 0.0) + result.request_time
+        return times
+
     def pairwise_comparisons(self, pairs: List[ServicePair]) -> List[PairwiseComparison]:
         """
         For each configured service pair, compute unique/matching tweaks between the two services.
@@ -188,13 +197,24 @@ class RangeAuditResult:
                     summary[result.service_name] = {
                         'total_tweaks': 0,
                         'blocks_processed': 0,
-                        'failures': 0
+                        'failures': 0,
+                        'total_request_time': 0.0
                     }
                 
                 if result.success:
                     summary[result.service_name]['total_tweaks'] += len(result.tweaks)
                     summary[result.service_name]['blocks_processed'] += 1
+                    summary[result.service_name]['total_request_time'] += result.request_time
                 else:
                     summary[result.service_name]['failures'] += 1
         
         return summary
+
+    @property
+    def total_request_time_by_service(self) -> Dict[str, float]:
+        """Sum of request_time for each service across all blocks"""
+        times = {}
+        for block_result in self.block_results:
+            for service_name, t in block_result.total_request_time_by_service.items():
+                times[service_name] = times.get(service_name, 0.0) + t
+        return times

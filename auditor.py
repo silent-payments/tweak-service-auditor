@@ -196,11 +196,3 @@ class TweakServiceAuditor:
                 f"{stats['blocks_processed']} blocks processed, "
                 f"{stats['failures']} failures"
             )
-    
-    def get_service_names(self) -> List[str]:
-        """Get list of configured service names"""
-        return [config.name for config in self.services]
-    
-    def get_service_count(self) -> int:
-        """Get total number of configured services"""
-        return len(self.services)

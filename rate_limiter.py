@@ -113,7 +113,7 @@ class RangeAuditRateLimiter:
         """
         self.service_limiter = ServiceRateLimiter()
         self.inter_block_delay = inter_block_delay
-        self.concurrent_limit = asyncio.Semaphore(10)  # Limit concurrent block processing
+        self.concurrent_limit = asyncio.Semaphore(100)  # Limit concurrent block processing
     
     def configure_service(self, service_name: str, requests_per_second: float):
         """Configure rate limiting for a service"""
@@ -122,20 +122,3 @@ class RangeAuditRateLimiter:
     async def acquire_service_token(self, service_name: str):
         """Acquire a token for a service request"""
         await self.service_limiter.acquire(service_name)
-    
-    async def acquire_block_slot(self):
-        """Acquire a slot for processing a block"""
-        await self.concurrent_limit.acquire()
-    
-    def release_block_slot(self):
-        """Release a block processing slot"""
-        self.concurrent_limit.release()
-    
-    async def inter_block_wait(self):
-        """Wait between processing blocks"""
-        if self.inter_block_delay > 0:
-            await asyncio.sleep(self.inter_block_delay)
-    
-    def get_service_status(self, service_name: str) -> Dict[str, float]:
-        """Get rate limiter status for a service"""
-        return self.service_limiter.get_status(service_name)

@@ -91,6 +91,11 @@ def print_audit_result(result: AuditResult, detailed: bool = False, service_pair
                 print(f"    {tweak}")
             if len(unique_tweaks) > 5:
                 print(f"    ... and {len(unique_tweaks) - 5} more")
+
+    # Print total request time per service
+    print("\nTotal request time by service:")
+    for service_name, total_time in result.total_request_time_by_service.items():
+        print(f"  {service_name}: {total_time:.3f} seconds")
     
     # Print failed services
     failed_services = [r for r in result.service_results if not r.success]
@@ -118,6 +123,11 @@ def print_range_result(result: RangeAuditResult, detailed: bool = False, service
         print(f"    Total tweaks: {stats['total_tweaks']}")
         print(f"    Blocks processed: {stats['blocks_processed']}")
         print(f"    Failures: {stats['failures']}")
+
+    # Print total request time per service
+    print("\nTotal request time by service (all blocks):")
+    for service_name, total_time in result.total_request_time_by_service.items():
+        print(f"  {service_name}: {total_time:.3f} seconds")
     
     # Print pairwise comparison summary for the range
     if service_pairs and result.block_results:
@@ -170,13 +180,11 @@ def print_range_result(result: RangeAuditResult, detailed: bool = False, service
                           f"{len(comparison.service1_unique)} + {len(comparison.service2_unique)} unique")
 
 
-
-
 async def _audit_common_config(args):
     """Shared config and validation logic for audit commands."""
     config_manager = ConfigManager(args.config)
     if not config_manager.services:
-        print("Error: No services configured. Use --create-config to create an example configuration.")
+        print("Error: No services configured. Use -c or copy sample.config.json to config.json")
         return None, None, 1
     issues = config_manager.validate_config()
     if issues:
@@ -257,7 +265,6 @@ async def audit_block_range(args):
                     'matching_tweaks': len(block_result.matching_tweaks),
                     'non_matching_by_service': {k: len(v) for k, v in block_result.non_matching_by_service.items()}
                 }
-                
                 # Add pairwise comparisons for this block
                 if service_pairs:
                     pairwise_comparisons = block_result.pairwise_comparisons(service_pairs)
@@ -275,7 +282,6 @@ async def audit_block_range(args):
                         }
                         for comp in pairwise_comparisons
                     ]
-                
                 output_data['block_results'].append(block_data)
             with open(args.output, 'w') as f:
                 json.dump(output_data, f, indent=2)
@@ -290,17 +296,11 @@ def manage_config(args):
     """Manage configuration"""
     config_manager = ConfigManager(args.config)
     
-    if args.create_config:
-        config_manager.create_example_config()
-        print(f"Example configuration created at {config_manager.config_file}")
-        print("Please edit the configuration file to add your actual service endpoints.")
-        return 0
-    
-    elif args.list_services:
+    if args.list:
         config_manager.print_services()
         return 0
     
-    elif args.validate_config:
+    elif args.validate:
         issues = config_manager.validate_config()
         if issues:
             print("Configuration validation failed:")
@@ -318,63 +318,79 @@ def manage_config(args):
 
 def main():
     """Main CLI entry point"""
+    # Common/global options that should work before or after the command
+    # Use two parent parsers to avoid defaults overriding values when options
+    # are provided only before or only after the subcommand.
+    common_main = argparse.ArgumentParser(add_help=False)
+    common_main.add_argument('--config', '-c', default='config.json',
+                             help='Configuration file path (default: config.json)')
+    common_main.add_argument('--verbose', '-v', action='count', default=0,
+                             help='Increase verbosity: -v for INFO, -vv for DEBUG (default: WARNING+ERROR only)')
+    common_main.add_argument('--detailed', '-d', action='store_true', default=False,
+                             help='Show detailed results')
+    common_main.add_argument('--output', '-o', default=None,
+                             help='Save results to JSON file')
+
+    # For subparsers, suppress defaults so main-level values (or absence) persist
+    common_sub = argparse.ArgumentParser(add_help=False)
+    common_sub.add_argument('--config', '-c', default=argparse.SUPPRESS,
+                            help='Configuration file path (default: config.json)')
+    common_sub.add_argument('--verbose', '-v', action='count', default=argparse.SUPPRESS,
+                            help='Increase verbosity: -v for INFO, -vv for DEBUG (default: WARNING+ERROR only)')
+    common_sub.add_argument('--detailed', '-d', action='store_true', default=argparse.SUPPRESS,
+                            help='Show detailed results')
+    common_sub.add_argument('--output', '-o', default=argparse.SUPPRESS,
+                            help='Save results to JSON file')
+
     parser = argparse.ArgumentParser(
         description="Silent Payments Tweak Service Auditor",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   # Audit a single block (WARNING+ERROR only)
-  python main.py audit-block 800000
+  python main.py block 800000
   
   # Audit with INFO level logging
-  python main.py -v audit-block 800000
+  python main.py -v block 800000
+  python main.py block 800000 -v
   
   # Audit with DEBUG level logging  
-  python main.py -vv audit-block 800000
+  python main.py -vv block 800000
   
   # Audit a range of blocks
-  python main.py audit-range 800000 800010
+  python main.py range 800000 800010
   
   # Audit with detailed output and save results
-  python main.py audit-block 800000 --detailed --output results.json
-        """
+  python main.py block 800000 --detailed --output results.json
+  
+  # Options can appear before or after the command
+  python main.py -c config.json block 800000 -vv
+        """,
+        parents=[common_main],
     )
-    
-    parser.add_argument('--config', '-c', default='config.json',
-                       help='Configuration file path (default: config.json)')
-    parser.add_argument('--verbose', '-v', action='count', default=0,
-                       help='Increase verbosity: -v for INFO, -vv for DEBUG (default: WARNING+ERROR only)')
     
     subparsers = parser.add_subparsers(dest='command', help='Available commands')
     
     # Configuration management
-    config_parser = subparsers.add_parser('config', help='Manage configuration')
-    config_parser.add_argument('--list-services', action='store_true',
+    config_parser = subparsers.add_parser('config', help='Manage configuration', parents=[common_sub])
+    config_parser.add_argument('--list', action='store_true',
                               help='List configured services')
-    config_parser.add_argument('--validate-config', action='store_true',
+    config_parser.add_argument('--validate', action='store_true',
                               help='Validate configuration')
     
-    # Single block audit
-    block_parser = subparsers.add_parser('audit-block', help='Audit a single block')
+    # Single block audit (alias old name for backwards compatibility)
+    block_parser = subparsers.add_parser('block', aliases=['audit-block'], help='Audit a single block', parents=[common_sub])
     block_parser.add_argument('block', type=int, help='Block height to audit')
-    block_parser.add_argument('--detailed', '-d', action='store_true',
-                             help='Show detailed results')
-    block_parser.add_argument('--output', '-o', 
-                             help='Save results to JSON file')
     
-    # Range audit
-    range_parser = subparsers.add_parser('audit-range', help='Audit a range of blocks')
+    # Range audit (alias old name for backwards compatibility)
+    range_parser = subparsers.add_parser('range', aliases=['audit-range'], help='Audit a range of blocks', parents=[common_sub])
     range_parser.add_argument('start_block', type=int, help='Starting block height')
     range_parser.add_argument('end_block', type=int, help='Ending block height')
-    range_parser.add_argument('--detailed', '-d', action='store_true',
-                             help='Show detailed results')
-    range_parser.add_argument('--output', '-o',
-                             help='Save results to JSON file')
-    
+
     args = parser.parse_args()
     
     # Setup logging
-    setup_logging(args.verbose)
+    setup_logging(getattr(args, 'verbose', 0))
     
     if not args.command:
         parser.print_help()
@@ -383,9 +399,9 @@ Examples:
     # Run appropriate command
     if args.command == 'config':
         return manage_config(args)
-    elif args.command == 'audit-block':
+    elif args.command == 'block':
         return asyncio.run(audit_single_block(args))
-    elif args.command == 'audit-range':
+    elif args.command == 'range':
         return asyncio.run(audit_block_range(args))
     else:
         print(f"Unknown command: {args.command}")
