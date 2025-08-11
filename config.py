@@ -44,7 +44,9 @@ class ConfigManager:
                     port=service_data.get('port'),
                     cookie_file=service_data.get('cookie_file'),
                     active=service_data.get('active'),
-                    requests_per_second=service_data.get('requests_per_second', 200)
+                    requests_per_second=service_data.get('requests_per_second', 200),
+                    filter_spent=service_data.get('filter_spent'),
+                    dust_limit=service_data.get('dust_limit')
                 )
                 self.services.append(service_config)
             

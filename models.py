@@ -47,6 +47,8 @@ class ServiceConfig:
     cookie_file: Optional[str] = None  # For cookie-based authentication
     active: bool = False
     requests_per_second: float = 200.0  # Max requests per second for this service
+    filter_spent: Optional[bool] = None  # For bitcoin & blindbit: whether to filter spent outputs
+    dust_limit: Optional[int] = None  # For bitcoin & blindbit: dust limit threshold
 
 
 @dataclass

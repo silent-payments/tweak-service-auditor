@@ -187,11 +187,14 @@ class BitcoinCoreRPCService(RPCIndexService):
                         )
                 
                 # Step 2: Get silent payment data using the block hash
+                # Use filter_spent and dust_limit from config if available, otherwise default
+                filter_spent = self.config.filter_spent if self.config.filter_spent is not None else False
+                dust_limit = self.config.dust_limit if self.config.dust_limit is not None else 0
                 sp_data_payload = {
                     "jsonrpc": "1.0",
                     "id": "silent_payments_audit",
                     "method": "getsilentpaymentblockdata",
-                    "params": [block_hash]
+                    "params": [block_hash, dust_limit, filter_spent]
                 }
                 
                 self.logger.debug(f"Getting silent payment data for block hash {block_hash}")
@@ -349,14 +352,13 @@ class TweakIndexHTTPService(HTTPIndexService):
     def _build_url(self, block_height: int) -> str:
         """Build URL for the tweak index endpoint"""
         base_endpoint = self.config.endpoint.rstrip('/')
-        
-        # Check if the endpoint already includes the tweak-index path
-        if base_endpoint.endswith('/tweak-index'):
-            # Endpoint already has the path, just add the height
-            return f"{base_endpoint}/{block_height}"
-        else:
-            # Need to add the full path
-            return f"{base_endpoint}/tweak-index/{block_height}"
+        base_url = f"{base_endpoint}/{block_height}"
+
+        # Add dust_limit as query parameter if configured
+        if hasattr(self.config, 'dust_limit') and self.config.dust_limit is not None:
+            separator = '&' if '?' in base_url else '?'
+            base_url += f"{separator}dust_limit={self.config.dust_limit}"
+        return base_url
     
     def _normalize_response(self, raw_response: Any, block_height: int) -> List[TweakData]:
         """Normalize tweak index HTTP response format"""
@@ -450,13 +452,13 @@ def create_service_instance(config: ServiceConfig) -> Union[HTTPIndexService, RP
     if config.service_type == ServiceType.HTTP:
         if 'electrum' in service_name_lower:
             return ElectrumServerService(config) # TODO
-        elif 'blindbit-oracle' in service_name_lower:
+        elif 'blindbit' in service_name_lower:
             return TweakIndexHTTPService(config)
         else:
             return ExampleHTTPService(config)
     
     elif config.service_type == ServiceType.RPC:
-        if 'bitcoin-core' in service_name_lower or 'bitcoind' in service_name_lower:
+        if 'bitcoin' in service_name_lower:
             return BitcoinCoreRPCService(config)
         else:
             return ExampleRPCService(config)

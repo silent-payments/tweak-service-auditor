@@ -83,7 +83,9 @@ The configuration file defines services and optional pairwise comparison groups:
       "timeout": 5,
       "active": true,
       "cookie_file": "/path/to/.cookie",
-      "requests_per_second": 200
+      "requests_per_second": 200,
+      "filter_spent": false,
+      "dust_limit": 0
     }
   ],
   "service_pairs": [
@@ -111,6 +113,8 @@ The configuration file defines services and optional pairwise comparison groups:
 - `active`: Whether the service is enabled for auditing (default: true)
 - `cookie_file`: Path to a cookie file for authentication (optional, for Bitcoin Core and similar)
 - `requests_per_second`: Maximum requests per second to this service (optional, default: 200)
+- `filter_spent`: Whether to filter spent outputs in Bitcoin Core RPC calls (optional, for bitcoin-core service type)
+- `dust_limit`: Dust limit threshold for Bitcoin Core RPC calls (optional, default: 0)
 
 **Service Pair Configuration:**
 - `name`: Unique identifier for the comparison pair

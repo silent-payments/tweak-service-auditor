@@ -1,7 +1,7 @@
 {
   "services": [
     {
-      "name": "blindbit-oracle",
+      "name": "blindbit",
       "service_type": "http",
       "endpoint": "http://127.0.0.1:8000/tweak-index",
       "headers": {
@@ -23,7 +23,7 @@
       "active": false
     },
     {
-      "name": "bitcoin-core",
+      "name": "bitcoin",
       "service_type": "rpc",
       "endpoint": "http://127.0.0.1:38332",
       "cookie_file": "~/work/bitcoin/signet/.cookie",
@@ -36,20 +36,20 @@
   "service_pairs": [
     {
       "name": "blindbit-vs-cake",
-      "service1": "blindbit-oracle",
+      "service1": "blindbit",
       "service2": "esplora-cake",
       "active": true
     },
     {
       "name": "blindbit-vs-core",
-      "service1": "blindbit-oracle",
-      "service2": "bitcoin-core",
+      "service1": "blindbit",
+      "service2": "bitcoin",
       "active": true
     },
     {
       "name": "cake-vs-core",
       "service1": "esplora-cake",
-      "service2": "bitcoin-core",
+      "service2": "bitcoin",
       "active": false
     }
   ]
