@@ -2,6 +2,20 @@
 
 A Python tool for auditing Silent Payments indexer tweak services to determine which services are producing the most accurate tweak data.
 
+## Outline
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Configuration](#configuration)
+- [Usage](#usage)
+- [Core Capabilities](#core-capabilities)
+- [Output Examples](#output-examples)
+- [JSON Output](#json-output)
+- [Architecture](#architecture)
+- [Logging and Error Handling](#logging-and-error-handling)
+- [Development](#development)
+- [Contributing](#contributing)
+- [License](#license)
+
 ## Features
 
 - **Multi-service support**: Audit multiple indexing services simultaneously
@@ -149,19 +163,6 @@ Direct socket connections for Esplora Cake and similar services:
 }
 ```
 
-Or with separate host/port:
-```json
-{
-  "name": "esplora-cake",
-  "service_type": "socket_rpc",
-  "host": "127.0.0.1",
-  "port": 60601,
-  "timeout": 30,
-  "active": true,
-  "requests_per_second": 200
-}
-```
-
 ### Defaults
 - `timeout`: 5 seconds if not specified
 - `active`: true if not specified
@@ -224,6 +225,29 @@ python main.py range 800000 801000 --output large_audit.json
 - `--verbose, -v, -vv`: Enable verbose logging for debugging
 - `--detailed, -d`: Show detailed results including individual tweak hashes
 - `--output, -o`: Save results to JSON file for further analysis
+
+### Services Setup Reference
+
+#### bitcoin core
+```sh
+# https://github.com/Sjors/bitcoin/pull/86
+cd <src path>/bitcoin
+./build/bin/bitcoin node -bip352index
+```
+
+##### cake esplora/electrs
+```sh
+# https://github.com/cake-tech/blockstream-electrs/tree/cake-update-v1
+cd <src path>/blockstream-electrs
+./target/release/electrs -vvv --network signet --db-dir <data path>/cake-electrs --index-unspendables --skip-mempool --blocks-dir <data path>/bitcoin/signet/blocks --daemon-dir <data path>/bitcoin --sp-begin-height 100000 --jsonrpc-import
+```
+
+#### blindbit-oracle
+```sh
+# https://github.com/setavenger/blindbit-oracle
+cd <src path>/blindbit-oracle
+go run ./src
+```
 
 ## Core Capabilities
 
