@@ -226,8 +226,8 @@ async def audit_single_block(args):
                         'service1_tweaks': len(comp.service1_tweaks),
                         'service2_tweaks': len(comp.service2_tweaks),
                         'matching_tweaks': len(comp.matching_tweaks),
-                        'service1_unique': len(comp.service1_unique),
-                        'service2_unique': len(comp.service2_unique),
+                        'service1_unique': list(comp.service1_unique) if args.detailed else len(comp.service1_unique),
+                        'service2_unique': list(comp.service2_unique) if args.detailed else len(comp.service2_unique),
                         'match_percentage': comp.match_percentage
                     }
                     for comp in pairwise_comparisons
@@ -276,8 +276,8 @@ async def audit_block_range(args):
                             'service1_tweaks': len(comp.service1_tweaks),
                             'service2_tweaks': len(comp.service2_tweaks),
                             'matching_tweaks': len(comp.matching_tweaks),
-                            'service1_unique': len(comp.service1_unique),
-                            'service2_unique': len(comp.service2_unique),
+                            'service1_unique': list(comp.service1_unique) if args.detailed else len(comp.service1_unique),
+                            'service2_unique': list(comp.service2_unique) if args.detailed else len(comp.service2_unique),
                             'match_percentage': comp.match_percentage
                         }
                         for comp in pairwise_comparisons
