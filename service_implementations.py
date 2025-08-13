@@ -313,7 +313,9 @@ class ElectrsRPCService(SocketRPCIndexService):
     
     def _build_rpc_call(self, block_height: int) -> tuple:
         """Build Electrs specific RPC call"""
-        return 'blockchain.block.tweaks', [block_height]
+        dust_limit = self.config.dust_limit if self.config.dust_limit is not None else 0
+        filter_spent = self.config.filter_spent if self.config.filter_spent is not None else False
+        return 'blockchain.block.tweaks', [block_height, dust_limit, filter_spent]
     
     def _normalize_response(self, raw_response: Any, block_height: int) -> List[TweakData]:
         """Normalize Electrs response format"""
@@ -464,7 +466,7 @@ def create_service_instance(config: ServiceConfig) -> Union[HTTPIndexService, RP
             return ExampleRPCService(config)
     
     elif config.service_type == ServiceType.SOCKET_RPC:
-        if 'esplora-cake' in service_name_lower or 'electrs' in service_name_lower:
+        if 'esplora' in service_name_lower or 'electrs' in service_name_lower:
             return ElectrsRPCService(config)
         else:
             return SocketRPCIndexService(config)
