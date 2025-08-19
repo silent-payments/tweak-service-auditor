@@ -1,0 +1,1 @@
+# BlindBit gRPC protobuf package

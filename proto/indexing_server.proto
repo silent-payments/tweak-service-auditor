@@ -1,0 +1,117 @@
+syntax = "proto3";
+
+package blindbit.oracle.v1;
+
+option go_package = "./pb";
+
+// BlockBatchFull contains all necessary information to find out if utxo is in a block
+// and which it is
+message BlockBatchFull {
+  BlockIdentifier block_identifier = 1;
+  repeated bytes tweaks = 2; // Array of 33-byte tweak data
+  repeated UTXO utxos = 3;  // Array of UTXOs
+  FilterData new_utxos_filter = 4;
+  FilterData spent_utxos_filter = 5;
+  repeated bytes spent_utxos = 6;  // Array of 32-byte hashes
+}
+
+// BlockBatchSlim contains minimal information for efficient processing
+message BlockBatchSlim {
+  BlockIdentifier block_identifier = 1;
+  repeated bytes tweaks = 2; // Array of 33-byte tweak data
+  FilterData new_utxos_filter = 3;
+  FilterData spent_utxos_filter = 4;
+}
+
+// BlockIdentifier uniquely identifies a block
+message BlockIdentifier {
+  bytes block_hash = 1;   // 32-byte block hash
+  uint64 block_height = 2; // Block height
+}
+
+// TweakArray contains tweaks for a specific block
+message TweakArray {
+  BlockIdentifier block_identifier = 1;
+  repeated bytes tweaks = 2; // Array of 33-byte tweak data
+}
+
+// UTXO represents an unspent transaction output
+message UTXO {
+  bytes txid = 1;           // Transaction ID (32 bytes)
+  uint32 vout = 2;          // Output index
+  uint64 value = 3;         // Value in satoshis
+  bytes script_pub_key = 4; // Script public key
+  uint64 block_height = 5;  // Block height where UTXO was created
+  bytes block_hash = 6;     // Block hash (32 bytes)
+  uint64 timestamp = 7;     // Timestamp
+  bool spent = 8;           // Whether UTXO is spent
+}
+
+// UTXOArrayResponse contains UTXOs for a specific block
+message UTXOArrayResponse {
+  BlockIdentifier block_identifier = 1;
+  repeated UTXO utxos = 2;
+}
+
+// FilterRepsonse contains filter data for a specific block
+message FilterRepsonse {
+  BlockIdentifier block_identifier = 1;
+  FilterData filter_data = 2;
+}
+
+// FilterData contains filter information
+message FilterData {
+  FilterType filter_type = 1;
+  bytes data = 2; // Filter data
+}
+
+// SpentOutpointsIndexResponse contains spent outpoints index
+message SpentOutpointsIndexResponse {
+  BlockIdentifier block_identifier = 1;
+  repeated bytes data = 2; // Array of spent outpoint data
+}
+
+// FilterType enumeration
+enum FilterType {
+  FILTER_TYPE_UNSPECIFIED = 0;
+  FILTER_TYPE_SPENT = 1;
+  FILTER_TYPE_NEW_UTXOS = 2;
+}
+
+// Request messages
+message BlockHeightRequest {
+  uint64 block_height = 1;
+}
+
+message RangedBlockHeightRequest {
+  uint64 start = 1;
+  uint64 end = 2;
+}
+
+message GetTweakIndexRequest {
+  uint64 block_height = 1;
+  uint64 dust_limit = 2; // Optional dust limit filter
+}
+
+message GetFilterRequest {
+  uint64 block_height = 1;
+  FilterType filter_type = 2;
+}
+
+// Response messages
+message InfoResponse {
+  string network = 1;
+  uint64 height = 2;
+  bool tweaks_only = 3;
+  bool tweaks_full_basic = 4;
+  bool tweaks_full_with_dust_filter = 5;
+  bool tweaks_cut_through_with_dust_filter = 6;
+}
+
+message BlockHeightResponse {
+  uint64 block_height = 1;
+}
+
+message BlockHashResponse {
+  bytes block_hash = 1; // 32-byte block hash
+}

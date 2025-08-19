@@ -6,7 +6,7 @@ import time
 import aiohttp
 import os
 from typing import List, Dict, Any, Union
-from service_interface import HTTPIndexService, RPCIndexService, SocketRPCIndexService
+from service_interface import HTTPIndexService, RPCIndexService, SocketRPCIndexService, GRPCIndexService
 from models import TweakData, ServiceConfig, ServiceType, ServiceResult
 
 
@@ -438,8 +438,111 @@ class TweakIndexHTTPService(HTTPIndexService):
         return tweaks
 
 
+class BlindBitGRPCService(GRPCIndexService):
+    """BlindBit Oracle gRPC service implementation"""
+    
+    def __init__(self, config: ServiceConfig):
+        super().__init__(config)
+        
+        # Import protobuf classes
+        try:
+            import grpc
+            from pb.oracle_service_pb2_grpc import OracleServiceStub
+            from pb.indexing_server_pb2 import BlockHeightRequest, GetTweakIndexRequest
+            self.grpc = grpc
+            self.OracleServiceStub = OracleServiceStub
+            self.BlockHeightRequest = BlockHeightRequest
+            self.GetTweakIndexRequest = GetTweakIndexRequest
+        except ImportError as e:
+            raise ImportError(f"Failed to import gRPC dependencies: {e}. Make sure grpcio and protobuf are installed.")
+    
+    async def get_tweaks_for_block(self, block_height: int) -> ServiceResult:
+        """Get tweaks via BlindBit Oracle gRPC"""
+        start_time = time.time()
+        
+        try:
+            # Get gRPC channel and create stub
+            channel = self._get_channel()
+            stub = self.OracleServiceStub(channel)
+            
+            filter_spent = self.config.filter_spent if self.config.filter_spent is not None else False
+            dust_limit = self.config.dust_limit if self.config.dust_limit is not None else 0
+            # Determine which method to use based on filter_spent configuration
+            if filter_spent:
+                # Use GetTweakIndexArray with dust limit
+                request = self.GetTweakIndexRequest(
+                    block_height=block_height,
+                    dust_limit=dust_limit
+                )
+                self.logger.debug(f"Making gRPC GetTweakIndexArray request for block {block_height} with dust_limit={dust_limit}")
+                response = stub.GetTweakIndexArray(request, timeout=self.config.timeout)
+            else:
+                # Use basic GetTweakArray
+                request = self.BlockHeightRequest(
+                    block_height=block_height
+                )
+                self.logger.debug(f"Making gRPC GetTweakArray request for block {block_height}")
+                response = stub.GetTweakArray(request, timeout=self.config.timeout)
+            
+            # Normalize the response
+            tweaks = self._normalize_response(response, block_height)
+            
+            return ServiceResult(
+                service_name=self.config.name,
+                block_height=block_height,
+                tweaks=tweaks,
+                request_time=time.time() - start_time,
+                success=True
+            )
+            
+        except Exception as e:
+            error_msg = f"BlindBit gRPC request error: {str(e)}"
+            self.logger.error(error_msg)
+            
+            return ServiceResult(
+                service_name=self.config.name,
+                block_height=block_height,
+                tweaks=[],
+                request_time=time.time() - start_time,
+                success=False,
+                error_message=error_msg
+            )
+        finally:
+            # Note: We keep the channel open for reuse, it will be closed when the service is destroyed
+            pass
+    
+    def _normalize_response(self, raw_response: Any, block_height: int) -> List[TweakData]:
+        """Normalize BlindBit gRPC response format"""
+        tweaks = []
+        
+        # BlindBit Oracle returns a TweakArray with block_identifier and tweaks
+        if hasattr(raw_response, 'tweaks'):
+            for i, tweak_bytes in enumerate(raw_response.tweaks):
+                # Convert bytes to hex string
+                tweak_hash = tweak_bytes.hex() if isinstance(tweak_bytes, bytes) else str(tweak_bytes)
+                
+                tweak = TweakData(
+                    tweak_hash=tweak_hash,
+                    block_height=block_height,
+                    transaction_id='',  # Not provided in BlindBit Oracle response
+                    output_index=i,     # Use array index as output index
+                    raw_data={
+                        'tweak_bytes': tweak_bytes,
+                        'index': i,
+                        'source': 'blindbit_grpc_oracle'
+                    }
+                )
+                tweaks.append(tweak)
+        
+        return tweaks
+    
+    def __del__(self):
+        """Cleanup when service is destroyed"""
+        self._close_channel()
+
+
 # Factory function to create service instances
-def create_service_instance(config: ServiceConfig) -> Union[HTTPIndexService, RPCIndexService, SocketRPCIndexService]:
+def create_service_instance(config: ServiceConfig) -> Union[HTTPIndexService, RPCIndexService, SocketRPCIndexService, GRPCIndexService]:
     """
     Factory function to create appropriate service instance based on config
     
@@ -471,5 +574,8 @@ def create_service_instance(config: ServiceConfig) -> Union[HTTPIndexService, RP
         else:
             return SocketRPCIndexService(config)
     
-    else:
-        raise ValueError(f"Unsupported service type: {config.service_type}")
+    elif config.service_type == ServiceType.GRPC:
+        if 'blindbit' in service_name_lower:
+            return BlindBitGRPCService(config)
+
+    raise ValueError(f"Unsupported service type: {config.service_type}")

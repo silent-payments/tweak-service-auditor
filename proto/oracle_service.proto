@@ -1,0 +1,41 @@
+syntax = "proto3";
+
+package blindbit.oracle.v1;
+
+option go_package = "./pb";
+
+import "google/protobuf/empty.proto";
+import "indexing_server.proto";
+
+// OracleService provides access to blockchain data via gRPC
+service OracleService {
+  // StreamBlockBatchSlim streams lightweight block batches for efficient processing
+  rpc StreamBlockBatchSlim(RangedBlockHeightRequest) returns (stream BlockBatchSlim);
+  
+  // StreamBlockBatchFull streams complete block batches with all data
+  rpc StreamBlockBatchFull(RangedBlockHeightRequest) returns (stream BlockBatchFull);
+  
+  // GetTweakArray returns tweaks for a specific block height
+  rpc GetTweakArray(BlockHeightRequest) returns (TweakArray);
+  
+  // GetTweakIndexArray returns tweak index data for a specific block height
+  rpc GetTweakIndexArray(GetTweakIndexRequest) returns (TweakArray);
+  
+  // GetUTXOArray returns UTXOs for a specific block height
+  rpc GetUTXOArray(BlockHeightRequest) returns (UTXOArrayResponse);
+  
+  // GetFilter returns filter data for a specific block height and type
+  rpc GetFilter(GetFilterRequest) returns (FilterRepsonse);
+  
+  // GetSpentOutpointsIndex returns spent outpoints index for a specific block height
+  rpc GetSpentOutpointsIndex(BlockHeightRequest) returns (SpentOutpointsIndexResponse);
+  
+  // GetInfo returns oracle information
+  rpc GetInfo(google.protobuf.Empty) returns (InfoResponse);
+  
+  // GetBestBlockHeight returns the current best block height
+  rpc GetBestBlockHeight(google.protobuf.Empty) returns (BlockHeightResponse);
+  
+  // GetBlockHashByHeight returns the block hash for a given height
+  rpc GetBlockHashByHeight(BlockHeightRequest) returns (BlockHashResponse);
+}
