@@ -448,11 +448,12 @@ class BlindBitGRPCService(GRPCIndexService):
         try:
             import grpc
             from pb.oracle_service_pb2_grpc import OracleServiceStub
-            from pb.indexing_server_pb2 import BlockHeightRequest, GetTweakIndexRequest
+            from pb.indexing_server_pb2 import BlockHeightRequest, GetTweakIndexRequest, RangedBlockHeightRequest
             self.grpc = grpc
             self.OracleServiceStub = OracleServiceStub
             self.BlockHeightRequest = BlockHeightRequest
             self.GetTweakIndexRequest = GetTweakIndexRequest
+            self.RangedBlockHeightRequest = RangedBlockHeightRequest
         except ImportError as e:
             raise ImportError(f"Failed to import gRPC dependencies: {e}. Make sure grpcio and protobuf are installed.")
     
@@ -511,6 +512,71 @@ class BlindBitGRPCService(GRPCIndexService):
             # Note: We keep the channel open for reuse, it will be closed when the service is destroyed
             pass
     
+    async def get_tweaks_for_range_stream(self, start_block: int, end_block: int) -> List[ServiceResult]:
+        """Get tweaks for a range of blocks using StreamBlockBatchSlim streaming"""
+        start_time = time.time()
+        results = []
+        
+        try:
+            # Get gRPC channel and create stub
+            channel = self._get_channel()
+            stub = self.OracleServiceStub(channel)
+            
+            # Create ranged request
+            request = self.RangedBlockHeightRequest(
+                start=start_block,
+                end=end_block
+            )
+            
+            self.logger.debug(f"Making gRPC StreamBlockBatchSlim request for blocks {start_block}-{end_block}")
+            
+            # Start streaming
+            stream = stub.StreamBlockBatchSlim(request, timeout=self.config.timeout)
+            
+            try:
+                for batch in stream:
+                    # Extract block height from the batch
+                    block_height = batch.block_identifier.block_height
+                    
+                    # Normalize the batch response for this block
+                    self.logger.warning(f"batch recv: {batch}")
+                    tweaks = self._normalize_stream_response(batch, block_height)
+                    
+                    # Create ServiceResult for this block
+                    result = ServiceResult(
+                        service_name=self.config.name,
+                        block_height=block_height,
+                        tweaks=tweaks,
+                        request_time=time.time() - start_time,  # Will be updated at the end
+                        success=True
+                    )
+                    results.append(result)
+                    
+                    self.logger.debug(f"Processed block {block_height} from stream: {len(tweaks)} tweaks")
+            
+            except Exception as stream_error:
+                error_msg = f"Stream processing error: {str(stream_error)}"
+                self.logger.error(f"BlindBit stream processing failed: {error_msg}, aborting range audit")
+                
+                # Return empty results list to indicate stream failure
+                return []
+            
+            # Update timing for all results
+            total_time = time.time() - start_time
+            for result in results:
+                result.request_time = total_time / len(results) if results else 0.0
+            
+            self.logger.info(f"Completed StreamBlockBatchSlim for {len(results)} blocks in {total_time:.2f}s")
+            return results
+            
+        except Exception as e:
+            error_msg = f"BlindBit streaming request error: {str(e)}"
+            self.logger.error(f"{error_msg}, aborting range audit")
+            return []
+        finally:
+            # Note: We keep the channel open for reuse, it will be closed when the service is destroyed
+            pass
+    
     def _normalize_response(self, raw_response: Any, block_height: int) -> List[TweakData]:
         """Normalize BlindBit gRPC response format"""
         tweaks = []
@@ -530,6 +596,32 @@ class BlindBitGRPCService(GRPCIndexService):
                         'tweak_bytes': tweak_bytes,
                         'index': i,
                         'source': 'blindbit_grpc_oracle'
+                    }
+                )
+                tweaks.append(tweak)
+        
+        return tweaks
+    
+    def _normalize_stream_response(self, batch_response: Any, block_height: int) -> List[TweakData]:
+        """Normalize BlindBit gRPC BlockBatchSlim stream response format"""
+        tweaks = []
+        
+        # BlockBatchSlim contains: block_identifier, tweaks, new_utxos_filter, spent_utxos_filter
+        if hasattr(batch_response, 'tweaks'):
+            for i, tweak_bytes in enumerate(batch_response.tweaks):
+                # Convert bytes to hex string
+                tweak_hash = tweak_bytes.hex() if isinstance(tweak_bytes, bytes) else str(tweak_bytes)
+                
+                tweak = TweakData(
+                    tweak_hash=tweak_hash,
+                    block_height=block_height,
+                    transaction_id='',  # Not provided in BlockBatchSlim
+                    output_index=i,     # Use array index as output index
+                    raw_data={
+                        'tweak_bytes': tweak_bytes,
+                        'index': i,
+                        'source': 'blindbit_grpc_stream',
+                        'block_hash': batch_response.block_identifier.block_hash.hex() if hasattr(batch_response.block_identifier, 'block_hash') else ''
                     }
                 )
                 tweaks.append(tweak)

@@ -7,7 +7,7 @@ import logging
 from typing import List
 import time
 
-from models import ServiceConfig, AuditResult, RangeAuditResult, ServiceResult
+from models import ServiceConfig, AuditResult, RangeAuditResult, ServiceResult, ServiceType
 from service_interface import IndexServiceInterface
 from service_implementations import create_service_instance
 from rate_limiter import RangeAuditRateLimiter
@@ -129,7 +129,9 @@ class TweakServiceAuditor:
 
     async def audit_range(self, start_block: int, end_block: int) -> RangeAuditResult:
         """
-        Audit a range of blocks
+        Audit a range of blocks using optimal strategy per service:
+        - BlindBit gRPC: Uses StreamBlockBatchSlim streaming
+        - All others: Individual block requests
         
         Args:
             start_block: Starting block height (inclusive)
@@ -143,16 +145,95 @@ class TweakServiceAuditor:
         if start_block > end_block:
             raise ValueError("Start block must be <= end block")
         
-        block_results = []
+        # Separate services into streaming and non-streaming
+        streaming_services = []
+        non_streaming_services = []
         
-        for block_height in range(start_block, end_block + 1):
+        for service in self.service_instances:
+            # Check if service supports streaming (only BlindBit gRPC for now)
+            if 'blindbit' in service.config.name.lower() and service.config.service_type == ServiceType.GRPC:
+                streaming_services.append(service)
+            else:
+                non_streaming_services.append(service)
+        
+        self.logger.info(f"Using streaming for {len(streaming_services)} services, individual requests for {len(non_streaming_services)} services")
+        
+        # Collect all results organized by block height
+        block_results_dict = {}
+        
+        # Process streaming services
+        for service in streaming_services:
             try:
-                result = await self.audit_block(block_height)
-                block_results.append(result)
+                self.logger.debug(f"Getting streaming results for {service.config.name}")
+                if self.enable_rate_limiting:
+                    # Acquire rate limit token for the entire range
+                    await self.rate_limiter.acquire_service_token(service.config.name)
+                
+                stream_results = await service.get_tweaks_for_range_stream(start_block, end_block)
+                
+                if not stream_results:
+                    self.logger.error(f"Streaming failed for {service.config.name}, falling back to individual requests")
+                    # Fall back to individual requests for this service
+                    non_streaming_services.append(service)
+                else:
+                    # Add streaming results to block results
+                    for result in stream_results:
+                        block_height = result.block_height
+                        if block_height not in block_results_dict:
+                            block_results_dict[block_height] = []
+                        block_results_dict[block_height].append(result)
+                        
             except Exception as e:
-                self.logger.error(f"Failed to audit block {block_height}: {e}")
-                # Continue with next block
-                continue
+                self.logger.error(f"Streaming service {service.config.name} failed: {e}, falling back to individual requests")
+                # Fall back to individual requests for this service
+                non_streaming_services.append(service)
+        
+        # Process non-streaming services using individual requests
+        for block_height in range(start_block, end_block + 1):
+            if block_height not in block_results_dict:
+                block_results_dict[block_height] = []
+            
+            # Create tasks for non-streaming services for this block
+            tasks = []
+            for service in non_streaming_services:
+                if self.enable_rate_limiting:
+                    task = self._rate_limited_service_call(service, block_height)
+                else:
+                    task = service.get_tweaks_for_block(block_height)
+                tasks.append(task)
+            
+            if tasks:
+                # Wait for all non-streaming services to complete for this block
+                service_results = await asyncio.gather(*tasks, return_exceptions=True)
+                
+                # Handle any exceptions
+                for i, result in enumerate(service_results):
+                    if isinstance(result, Exception):
+                        self.logger.error(f"Service {non_streaming_services[i].config.name} failed for block {block_height}: {result}")
+                        # Create a failed ServiceResult
+                        failed_result = ServiceResult(
+                            service_name=non_streaming_services[i].config.name,
+                            block_height=block_height,
+                            tweaks=[],
+                            request_time=0.0,
+                            success=False,
+                            error_message=str(result)
+                        )
+                        block_results_dict[block_height].append(failed_result)
+                    else:
+                        block_results_dict[block_height].append(result)
+        
+        # Convert block results dict to AuditResult list
+        block_results = []
+        for block_height in range(start_block, end_block + 1):
+            if block_height in block_results_dict:
+                audit_result = AuditResult(
+                    block_height=block_height,
+                    service_results=block_results_dict[block_height],
+                    total_services=len(self.service_instances),
+                    successful_services=sum(1 for r in block_results_dict[block_height] if r.success)
+                )
+                block_results.append(audit_result)
         
         range_result = RangeAuditResult(
             start_block=start_block,

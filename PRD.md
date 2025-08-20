@@ -51,3 +51,15 @@ If my answers don't change the plan above you can perform steps 1-5
 ```
 [Request interrupted by user for tool use]proceed with the suggested change above to service_implementations.py
 ```
+
+
+
+
+
+review the #codebase and implement blindbit-oracle StreamBlockBatchSlim streaming to audit blocks
+
+for each step in the plan provid me with a list of actions and wait for confirmation or edits before continuing
+
+let me know if you have any questions or need clarification along the way
+
+speed is not important, precision is valued
