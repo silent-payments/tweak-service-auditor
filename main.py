@@ -248,44 +248,44 @@ async def audit_block_range(args):
     if err:
         return err
     try:
-        result = await auditor.audit_range(args.start_block, args.end_block)
+        # Determine output file for streaming detailed results
+        detailed_output_file = None
+        if args.output and args.detailed:
+            # For detailed output, stream to a separate file and create summary in main output
+            detailed_output_file = f"{args.output}.detailed.json"
+            print(f"Detailed block results will be streamed to {detailed_output_file}")
+        elif args.output:
+            # For non-detailed output, stream directly to main output file
+            detailed_output_file = args.output
+        
+        # Get batch size from args
+        batch_size = getattr(args, 'batch_size', 200)
+        
+        result = await auditor.audit_range(
+            args.start_block, 
+            args.end_block, 
+            batch_size=batch_size,
+            output_file=detailed_output_file
+        )
         print_range_result(result, args.detailed, service_pairs)
-        if args.output:
-            output_data = {
+        
+        # Create summary output if detailed streaming was used
+        if args.output and args.detailed and detailed_output_file != args.output:
+            summary_data = {
                 'start_block': result.start_block,
                 'end_block': result.end_block,
                 'total_blocks_audited': result.total_blocks_audited,
                 'summary_by_service': result.summary_by_service,
-                'block_results': []
+                'total_request_time_by_service': result.total_request_time_by_service,
+                'detailed_results_file': detailed_output_file
             }
-            for block_result in result.block_results:
-                block_data = {
-                    'block_height': block_result.block_height,
-                    'tweak_counts': block_result.tweak_counts,
-                    'matching_tweaks': len(block_result.matching_tweaks),
-                    'non_matching_by_service': {k: len(v) for k, v in block_result.non_matching_by_service.items()}
-                }
-                # Add pairwise comparisons for this block
-                if service_pairs:
-                    pairwise_comparisons = block_result.pairwise_comparisons(service_pairs)
-                    block_data['pairwise_comparisons'] = [
-                        {
-                            'pair_name': comp.pair_name,
-                            'service1_name': comp.service1_name,
-                            'service2_name': comp.service2_name,
-                            'service1_tweaks': len(comp.service1_tweaks),
-                            'service2_tweaks': len(comp.service2_tweaks),
-                            'matching_tweaks': len(comp.matching_tweaks),
-                            'service1_unique': list(comp.service1_unique) if args.detailed else len(comp.service1_unique),
-                            'service2_unique': list(comp.service2_unique) if args.detailed else len(comp.service2_unique),
-                            'match_percentage': comp.match_percentage
-                        }
-                        for comp in pairwise_comparisons
-                    ]
-                output_data['block_results'].append(block_data)
             with open(args.output, 'w') as f:
-                json.dump(output_data, f, indent=2)
+                json.dump(summary_data, f, indent=2)
+            print(f"\nSummary saved to {args.output}")
+            print(f"Detailed results saved to {detailed_output_file}")
+        elif args.output and not args.detailed:
             print(f"\nResults saved to {args.output}")
+        
         return 0
     except Exception as e:
         print(f"Error during range audit: {e}")
@@ -386,6 +386,7 @@ Examples:
     range_parser = subparsers.add_parser('range', aliases=['audit-range'], help='Audit a range of blocks', parents=[common_sub])
     range_parser.add_argument('start_block', type=int, help='Starting block height')
     range_parser.add_argument('end_block', type=int, help='Ending block height')
+    range_parser.add_argument('--batch-size', type=int, default=200, help='Number of blocks to process in each batch (default: 200)')
 
     args = parser.parse_args()
     

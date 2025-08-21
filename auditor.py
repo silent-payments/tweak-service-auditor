@@ -4,8 +4,9 @@ Main auditor class that coordinates multiple indexing services
 """
 import asyncio
 import logging
-from typing import List
+from typing import List, Optional
 import time
+import json
 
 from models import ServiceConfig, AuditResult, RangeAuditResult, ServiceResult
 from service_interface import IndexServiceInterface
@@ -127,40 +128,86 @@ class TweakServiceAuditor:
         # Make the actual service call
         return await service.get_tweaks_for_block(block_height)
 
-    async def audit_range(self, start_block: int, end_block: int) -> RangeAuditResult:
+    async def audit_range(self, start_block: int, end_block: int, batch_size: int = 200, 
+                         output_file: Optional[str] = None) -> RangeAuditResult:
         """
-        Audit a range of blocks
+        Audit a range of blocks using streaming approach to minimize memory usage
         
         Args:
             start_block: Starting block height (inclusive)
             end_block: Ending block height (inclusive)
+            batch_size: Number of blocks to process in each batch (default: 200)
+            output_file: Optional file to stream detailed results to
             
         Returns:
-            RangeAuditResult containing results for all blocks in range
+            RangeAuditResult containing summary data only (not full block results)
         """
-        self.logger.info(f"Starting range audit from block {start_block} to {end_block}")
+        self.logger.info(f"Starting streaming range audit from block {start_block} to {end_block} (batch_size={batch_size})")
         
         if start_block > end_block:
             raise ValueError("Start block must be <= end block")
         
-        block_results = []
+        # Initialize summary tracking
+        total_blocks_processed = 0
+        service_summary = {}
+        total_request_times = {}
         
-        for block_height in range(start_block, end_block + 1):
-            try:
-                result = await self.audit_block(block_height)
-                block_results.append(result)
-            except Exception as e:
-                self.logger.error(f"Failed to audit block {block_height}: {e}")
-                # Continue with next block
-                continue
+        # Setup streaming output file if specified
+        output_handle = None
+        if output_file:
+            output_handle = open(output_file, 'w')
+            output_handle.write('{"blocks":[')
+            first_block = True
         
+        try:
+            # Process blocks in batches
+            for batch_start in range(start_block, end_block + 1, batch_size):
+                batch_end = min(batch_start + batch_size - 1, end_block)
+                self.logger.info(f"Processing batch: blocks {batch_start}-{batch_end}")
+                
+                batch_results = []
+                
+                # Process each block in the batch
+                for block_height in range(batch_start, batch_end + 1):
+                    try:
+                        result = await self.audit_block(block_height)
+                        batch_results.append(result)
+                        total_blocks_processed += 1
+                        
+                        # Update service summary
+                        self._update_service_summary(result, service_summary, total_request_times)
+                        
+                        # Stream to output file if specified
+                        if output_handle:
+                            if not first_block:
+                                output_handle.write(',')
+                            self._write_block_result_to_stream(result, output_handle)
+                            first_block = False
+                            
+                    except Exception as e:
+                        self.logger.error(f"Failed to audit block {block_height}: {e}")
+                        continue
+                
+                # Log batch completion and clear batch results to free memory
+                self.logger.info(f"Completed batch {batch_start}-{batch_end}: {len(batch_results)} blocks")
+                batch_results.clear()  # Free memory immediately
+        
+        finally:
+            if output_handle:
+                output_handle.write(']}')
+                output_handle.close()
+        
+        # Create summary-only range result
         range_result = RangeAuditResult(
             start_block=start_block,
             end_block=end_block,
-            block_results=block_results
+            block_results=[],  # Empty list - summary only
+            _summary_by_service=service_summary,
+            _total_request_time_by_service=total_request_times,
+            _total_blocks_audited=total_blocks_processed
         )
         
-        self.logger.info(f"Completed range audit: {len(block_results)} blocks processed")
+        self.logger.info(f"Completed streaming range audit: {total_blocks_processed} blocks processed")
         self._log_range_summary(range_result)
         
         return range_result
@@ -183,6 +230,38 @@ class TweakServiceAuditor:
         for service_name, non_matching_tweaks in non_matching.items():
             if non_matching_tweaks:
                 self.logger.info(f"  {service_name} unique tweaks: {len(non_matching_tweaks)}")
+    
+    def _update_service_summary(self, result: AuditResult, service_summary: dict, total_request_times: dict):
+        """Update running service summary with results from a single block"""
+        for service_result in result.service_results:
+            service_name = service_result.service_name
+            
+            if service_name not in service_summary:
+                service_summary[service_name] = {
+                    'total_tweaks': 0,
+                    'blocks_processed': 0,
+                    'failures': 0,
+                    'total_request_time': 0.0
+                }
+            
+            if service_result.success:
+                service_summary[service_name]['total_tweaks'] += len(service_result.tweaks)
+                service_summary[service_name]['blocks_processed'] += 1
+                service_summary[service_name]['total_request_time'] += service_result.request_time
+                total_request_times[service_name] = total_request_times.get(service_name, 0.0) + service_result.request_time
+            else:
+                service_summary[service_name]['failures'] += 1
+    
+    def _write_block_result_to_stream(self, result: AuditResult, output_handle):
+        """Write a single block result to the output stream in JSON Lines format"""
+        block_data = {
+            'block_height': result.block_height,
+            'tweak_counts': result.tweak_counts,
+            'matching_tweaks': len(result.matching_tweaks),
+            'non_matching_by_service': {k: len(v) for k, v in result.non_matching_by_service.items()},
+            'total_request_time_by_service': result.total_request_time_by_service
+        }
+        json.dump(block_data, output_handle, separators=(',', ':'))
     
     def _log_range_summary(self, range_result: RangeAuditResult):
         """Log summary of range audit"""

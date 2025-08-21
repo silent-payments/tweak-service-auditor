@@ -179,20 +179,28 @@ class AuditResult:
 
 @dataclass 
 class RangeAuditResult:
-    """Audit result for a range of blocks"""
+    """Audit result for a range of blocks (streaming version)"""
     start_block: int
     end_block: int
-    block_results: List[AuditResult]
+    block_results: List[AuditResult]  # Usually empty in streaming mode
+    _summary_by_service: Optional[Dict[str, Dict[str, Any]]] = None
+    _total_request_time_by_service: Optional[Dict[str, float]] = None
+    _total_blocks_audited: Optional[int] = None
     
     @property
     def total_blocks_audited(self) -> int:
+        if self._total_blocks_audited is not None:
+            return self._total_blocks_audited
         return len(self.block_results)
     
     @property
-    def summary_by_service(self) -> Dict[str, Dict[str, int]]:
+    def summary_by_service(self) -> Dict[str, Dict[str, Any]]:
         """Summary statistics by service across all blocks"""
-        summary = {}
+        if self._summary_by_service is not None:
+            return self._summary_by_service
         
+        # Fallback to computing from block_results (legacy mode)
+        summary = {}
         for block_result in self.block_results:
             for result in block_result.service_results:
                 if result.service_name not in summary:
@@ -215,6 +223,10 @@ class RangeAuditResult:
     @property
     def total_request_time_by_service(self) -> Dict[str, float]:
         """Sum of request_time for each service across all blocks"""
+        if self._total_request_time_by_service is not None:
+            return self._total_request_time_by_service
+        
+        # Fallback to computing from block_results (legacy mode)
         times = {}
         for block_result in self.block_results:
             for service_name, t in block_result.total_request_time_by_service.items():
