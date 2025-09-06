@@ -539,7 +539,6 @@ class BlindBitGRPCService(GRPCIndexService):
                     block_height = batch.block_identifier.block_height
                     
                     # Normalize the batch response for this block
-                    self.logger.warning(f"batch recv: {batch}")
                     tweaks = self._normalize_stream_response(batch, block_height)
                     
                     # Create ServiceResult for this block

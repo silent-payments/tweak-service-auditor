@@ -39,7 +39,7 @@ class ConfigManager:
                     endpoint=service_data['endpoint'],
                     auth=service_data.get('auth'),
                     headers=service_data.get('headers'),
-                    timeout=service_data.get('timeout', 5),
+                    timeout=service_data.get('timeout', 60),
                     host=service_data.get('host'),
                     port=service_data.get('port'),
                     cookie_file=service_data.get('cookie_file'),

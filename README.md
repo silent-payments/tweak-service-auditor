@@ -109,7 +109,7 @@ The configuration file defines services and optional pairwise comparison groups:
 - `port`: Port number (optional, for socket_rpc services)
 - `auth`: Authentication credentials (optional)
 - `headers`: Custom HTTP headers (optional, HTTP/RPC only)
-- `timeout`: Request timeout in seconds (default: 5)
+- `timeout`: Request timeout in seconds (default: 60)
 - `active`: Whether the service is enabled for auditing (default: true)
 - `cookie_file`: Path to a cookie file for authentication (optional, for Bitcoin Core and similar)
 - `requests_per_second`: Maximum requests per second to this service (optional, default: 200)

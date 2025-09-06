@@ -42,7 +42,7 @@ class ServiceConfig:
     endpoint: str
     auth: Optional[Dict[str, str]] = None
     headers: Optional[Dict[str, str]] = None
-    timeout: int = 5
+    timeout: int = 60
     host: Optional[str] = None  # For socket-based services
     port: Optional[int] = None  # For socket-based services
     cookie_file: Optional[str] = None  # For cookie-based authentication
