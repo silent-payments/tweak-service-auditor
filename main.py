@@ -6,11 +6,13 @@ import asyncio
 import logging
 import json
 import sys
+import os
+from pathlib import Path
 from typing import List
 
 from auditor import TweakServiceAuditor
 from config import ConfigManager
-from models import AuditResult, RangeAuditResult, PairwiseComparison
+from models import AuditResult, RangeAuditResult, PairwiseComparison, ServiceConfig, ServiceType
 
 
 def setup_logging(verbosity: int = 0):
@@ -35,7 +37,7 @@ def setup_logging(verbosity: int = 0):
     )
 
 
-def print_pairwise_comparisons(comparisons: List[PairwiseComparison], detailed: bool = False):
+def print_pairwise_comparisons(comparisons: List[PairwiseComparison], detailed: bool = False, service_configs: List[ServiceConfig] = None, ignore_filter_mismatch: bool = False):
     """Print pairwise comparison results in a readable format"""
     if not comparisons:
         return
@@ -43,6 +45,9 @@ def print_pairwise_comparisons(comparisons: List[PairwiseComparison], detailed: 
     print(f"\n=== Pairwise Service Comparisons ===")
     
     for comparison in comparisons:
+        # Check for filter mismatches between services
+        if service_configs and not ignore_filter_mismatch:
+            _check_comparison_filter_mismatch(comparison, service_configs)
         print(f"\n{comparison.pair_name} ({comparison.service1_name} vs {comparison.service2_name}):")
         print(f"  {comparison.service1_name}: {len(comparison.service1_tweaks)} tweaks")
         print(f"  {comparison.service2_name}: {len(comparison.service2_tweaks)} tweaks")
@@ -67,8 +72,80 @@ def print_pairwise_comparisons(comparisons: List[PairwiseComparison], detailed: 
                     print(f"      ... and {len(comparison.service2_unique) - 5} more")
 
 
-def print_audit_result(result: AuditResult, detailed: bool = False, service_pairs: List = None):
-    """Print audit result in a readable format"""
+def _check_comparison_filter_mismatch(comparison: PairwiseComparison, service_configs: List[ServiceConfig]):
+    """Check for filter configuration mismatches between services in a comparison"""
+    # Get configs for both services
+    service1_config = next((c for c in service_configs if c.name == comparison.service1_name), None)
+    service2_config = next((c for c in service_configs if c.name == comparison.service2_name), None)
+    
+    if not service1_config or not service2_config:
+        return
+    
+    # Check if one service is test_data and the other is not
+    service1_is_test = service1_config.service_type == ServiceType.TEST_DATA
+    service2_is_test = service2_config.service_type == ServiceType.TEST_DATA
+    
+    # Only validate if exactly one service is test_data
+    if service1_is_test == service2_is_test:
+        return  # Both are test_data or both are real services
+    
+    # Determine which is the real service and which is test_data
+    if service1_is_test:
+        test_service = service1_config
+        real_service = service2_config
+        test_service_name = comparison.service1_name
+        real_service_name = comparison.service2_name
+    else:
+        test_service = service2_config
+        real_service = service1_config
+        test_service_name = comparison.service2_name
+        real_service_name = comparison.service1_name
+    
+    # We need to read the test data to get the reference filter config
+    from pathlib import Path
+    test_data_dir = Path("test_data")
+    
+    # We need the block height, but we don't have it here. We'll need to get it from somewhere.
+    # For now, let's check if there are any test files and read the first one to get reference config
+    test_files = list(test_data_dir.glob("block_*.json"))
+    if not test_files:
+        return
+    
+    try:
+        import json
+        with open(test_files[0], 'r') as f:
+            test_data = json.load(f)
+        
+        reference_filter_config = test_data.get('reference_filter_config', {})
+        if not reference_filter_config:
+            return
+        
+        ref_dust_limit = reference_filter_config.get('dust_limit')
+        ref_filter_spent = reference_filter_config.get('filter_spent')
+        
+        real_dust_limit = real_service.dust_limit
+        real_filter_spent = real_service.filter_spent
+        
+        # Check for mismatches
+        mismatches = []
+        if ref_dust_limit != real_dust_limit:
+            mismatches.append(f"dust_limit={real_dust_limit} (test data has {ref_dust_limit})")
+        if ref_filter_spent != real_filter_spent:
+            mismatches.append(f"filter_spent={real_filter_spent} (test data has {ref_filter_spent})")
+        
+        if mismatches:
+            reference_service = test_data.get('reference_service', 'unknown')
+            mismatch_details = ", ".join(mismatches)
+            warning_msg = f"Service '{real_service_name}' has filter mismatch with test data (from '{reference_service}'): {mismatch_details}"
+            print(f"WARNING: {warning_msg}")
+            print("         This comparison may not be meaningful due to different filtering.")
+    
+    except Exception:
+        # If we can't read test data, skip validation
+        pass
+
+
+def print_audit_result(result: AuditResult, detailed: bool = False, service_pairs: List = None, service_configs: List[ServiceConfig] = None, ignore_filter_mismatch: bool = False):
     print(f"\n=== Audit Results for Block {result.block_height} ===")
     print(f"Services: {result.successful_services}/{result.total_services} successful")
     
@@ -107,7 +184,68 @@ def print_audit_result(result: AuditResult, detailed: bool = False, service_pair
     # Print pairwise comparisons if service pairs are configured
     if service_pairs:
         pairwise_comparisons = result.pairwise_comparisons(service_pairs)
-        print_pairwise_comparisons(pairwise_comparisons, detailed)
+        print_pairwise_comparisons(pairwise_comparisons, detailed, service_configs, ignore_filter_mismatch)
+
+
+def store_test_data(result: AuditResult, service_configs: List[ServiceConfig], reference_service: str = None):
+    """Store full tweak output for a block to test_data/ directory as canonical reference data"""
+    test_data_dir = Path("test_data")
+    test_data_dir.mkdir(exist_ok=True)
+    
+    # Create filename based on block height
+    filename = f"block_{result.block_height}.json"
+    filepath = test_data_dir / filename
+    
+    # Find the reference service to use as canonical data
+    reference_result = None
+    
+    if reference_service:
+        # Use specified service as reference
+        reference_result = next((r for r in result.service_results if r.service_name == reference_service and r.success), None)
+        if not reference_result:
+            print(f"Warning: Specified reference service '{reference_service}' not found or failed. Using first successful service.")
+    
+    # If no specific service or it failed, use first successful service
+    if not reference_result:
+        reference_result = next((r for r in result.service_results if r.success), None)
+    
+    if not reference_result:
+        print("Error: No successful services found. Cannot store test data.")
+        return
+    
+    # Get the reference service config to store filter settings
+    reference_config = None
+    for config in service_configs:
+        if config.name == reference_result.service_name:
+            reference_config = config
+            break
+    
+    # Prepare canonical test data 
+    test_data = {
+        "block_height": result.block_height,
+        "reference_service": reference_result.service_name,
+        "tweak_count": len(reference_result.tweaks),
+        "reference_filter_config": {
+            "dust_limit": reference_config.dust_limit if reference_config else None,
+            "filter_spent": reference_config.filter_spent if reference_config else None
+        },
+        "tweaks": [
+            {
+                "tweak_hash": tweak.tweak_hash,
+                "block_height": tweak.block_height,
+                "transaction_id": tweak.transaction_id,
+                "output_index": tweak.output_index,
+                "raw_data": tweak.raw_data
+            }
+            for tweak in reference_result.tweaks
+        ]
+    }
+    
+    # Write test data to file
+    with open(filepath, 'w') as f:
+        json.dump(test_data, f, indent=2)
+    
+    print(f"Test data stored to {filepath} (reference: {reference_result.service_name}, {len(reference_result.tweaks)} tweaks)")
 
 
 def print_range_result(result: RangeAuditResult, detailed: bool = False, service_pairs: List = None):
@@ -192,7 +330,10 @@ async def _audit_common_config(args):
         for issue in issues:
             print(f"  - {issue}")
         return None, None, 1
-    auditor = TweakServiceAuditor(config_manager.services)
+    
+    # Pass ignore-filter-mismatch flag to the auditor
+    ignore_filter_mismatch = getattr(args, 'ignore_filter_mismatch', False)
+    auditor = TweakServiceAuditor(config_manager.services, ignore_filter_mismatch=ignore_filter_mismatch)
     return auditor, config_manager.get_active_service_pairs(), 0
 
 
@@ -203,7 +344,16 @@ async def audit_single_block(args):
         return err
     try:
         result = await auditor.audit_block(args.block)
-        print_audit_result(result, args.detailed, service_pairs)
+        ignore_filter_mismatch = getattr(args, 'ignore_filter_mismatch', False)
+        print_audit_result(result, args.detailed, service_pairs, auditor.services, ignore_filter_mismatch)
+        
+        # Store test data if requested
+        store_test_flag = getattr(args, 'store_test', False)
+        if store_test_flag:
+            # Extract reference service name if specified (store_test can be True or a service name)
+            reference_service = store_test_flag if isinstance(store_test_flag, str) else None
+            store_test_data(result, auditor.services, reference_service)
+        
         if args.output:
             output_data = {
                 'block_height': result.block_height,
@@ -330,6 +480,10 @@ def main():
                              help='Show detailed results')
     common_main.add_argument('--output', '-o', default=None,
                              help='Save results to JSON file')
+    common_main.add_argument('--store_test', metavar='SERVICE', nargs='?', const=True, default=False,
+                             help='Store full tweak output for the block to test_data/ directory. Optionally specify service name to use as reference (default: first successful service)')
+    common_main.add_argument('--ignore-filter-mismatch', action='store_true', default=False,
+                             help='Ignore filter config mismatches when using test_data services (default: show warnings)')
 
     # For subparsers, suppress defaults so main-level values (or absence) persist
     common_sub = argparse.ArgumentParser(add_help=False)
@@ -341,6 +495,10 @@ def main():
                             help='Show detailed results')
     common_sub.add_argument('--output', '-o', default=argparse.SUPPRESS,
                             help='Save results to JSON file')
+    common_sub.add_argument('--store_test', metavar='SERVICE', nargs='?', const=True, default=argparse.SUPPRESS,
+                            help='Store full tweak output for the block to test_data/ directory. Optionally specify service name to use as reference (default: first successful service)')
+    common_sub.add_argument('--ignore-filter-mismatch', action='store_true', default=argparse.SUPPRESS,
+                            help='Ignore filter config mismatches when using test_data services (default: show warnings)')
 
     parser = argparse.ArgumentParser(
         description="Silent Payments Tweak Service Auditor",
@@ -362,6 +520,15 @@ Examples:
   
   # Audit with detailed output and save results
   python main.py block 800000 --detailed --output results.json
+  
+  # Store test data from a specific service
+  python main.py block 800000 --store_test=bitcoin
+  
+  # Store test data from first successful service
+  python main.py block 800000 --store_test
+  
+  # Use test data service (ignoring filter mismatches)
+  python main.py -c test_config.json block 800000 --ignore-filter-mismatch
   
   # Options can appear before or after the command
   python main.py -c config.json block 800000 -vv

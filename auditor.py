@@ -17,7 +17,7 @@ class TweakServiceAuditor:
     """Main auditor class for Silent Payments tweak services"""
     
     def __init__(self, services: List[ServiceConfig], enable_rate_limiting: bool = True, 
-                 inter_block_delay: float = 0.0001):
+                 inter_block_delay: float = 0.0001, ignore_filter_mismatch: bool = False):
         """
         Initialize the auditor with a list of service configurations
         
@@ -25,11 +25,13 @@ class TweakServiceAuditor:
             services: List of ServiceConfig objects
             enable_rate_limiting: Whether to enable rate limiting (default: True)
             inter_block_delay: Delay between blocks in range audits (default: 0.0001s)
+            ignore_filter_mismatch: Whether to ignore filter config mismatches (default: False)
         """
         self.services = services
         self.service_instances: List[IndexServiceInterface] = []
         self.logger = logging.getLogger("auditor")
         self.enable_rate_limiting = enable_rate_limiting
+        self.ignore_filter_mismatch = ignore_filter_mismatch
         
         # Initialize rate limiter
         self.rate_limiter = RangeAuditRateLimiter(inter_block_delay=inter_block_delay)
@@ -37,7 +39,7 @@ class TweakServiceAuditor:
         # Initialize service instances using factory function
         for config in services:
             if config.active:
-                service_instance = create_service_instance(config)
+                service_instance = create_service_instance(config, ignore_filter_mismatch)
                 self.service_instances.append(service_instance)
                 
                 # Configure rate limiting for this service

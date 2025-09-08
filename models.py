@@ -13,6 +13,7 @@ class ServiceType(Enum):
     RPC = "rpc"
     SOCKET_RPC = "socket_rpc"
     GRPC = "grpc"
+    TEST_DATA = "test_data"
 
 
 @dataclass
