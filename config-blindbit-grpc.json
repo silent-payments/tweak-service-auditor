@@ -5,18 +5,18 @@
       "service_type": "grpc",
       "endpoint": "127.0.0.1:50051",
       "active": true,
-      "timeout": 10,
+      "timeout": 600,
       "requests_per_second": 150,
-      "dust_limit": 1
+      "dust_limit": 0
     },
     {
       "name": "blindbit-grpc-spent",
       "service_type": "grpc",
       "endpoint": "127.0.0.1:50051",
-      "active": true,
-      "timeout": 10,
+      "active": false,
+      "timeout": 600,
       "requests_per_second": 150,
-      "dust_limit": 1,
+      "dust_limit": 0,
       "filter_spent": true
     },
     {
@@ -26,7 +26,7 @@
       "headers": {
         "User-Agent": "TweakServiceAuditor/1.0"
       },
-      "active": true,
+      "active": false,
       "requests_per_second": 100,
       "dust_limit": 0
     },
@@ -40,12 +40,29 @@
       "active": true,
       "requests_per_second": 100,
       "dust_limit": 0
+    },
+    {
+      "name": "bitcoin",
+      "service_type": "rpc",
+      "endpoint": "http://127.0.0.1:38332",
+      "cookie_file": "~/work/bitcoin/signet/.cookie",
+      "headers": {
+        "User-Agent": "TweakServiceAuditor/1.0"
+      },
+      "active": true,
+      "filter_spent": false,
+      "dust_limit": 0
     }
-
   ],
   "service_pairs": [
     {
-      "name": "grpc_vs_http",
+      "name": "blindbit_grpc_vs_bitcoin",
+      "service1": "blindbit-grpc",
+      "service2": "bitcoin",
+      "active": true
+    },
+    {
+      "name": "blindbit_grpc_vs_blindbit",
       "service1": "blindbit-grpc",
       "service2": "blindbit",
       "active": true
