@@ -31,6 +31,12 @@
         "User-Agent": "TweakServiceAuditor/1.0"
       },
       "active": true
+    },
+    {
+      "name": "frigate",
+      "service_type": "socket_rpc",
+      "endpoint": "127.0.0.1:57001",
+      "active": true
     }
   ],
   "service_pairs": [

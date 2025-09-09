@@ -350,6 +350,114 @@ class ElectrsRPCService(SocketRPCIndexService):
         return tweaks
 
 
+class FrigateElectrumService(SocketRPCIndexService):
+    """Frigate Electrum server socket RPC service implementation"""
+    
+    async def get_tweaks_for_block(self, block_height: int) -> ServiceResult:
+        """Get tweaks via Frigate's blockchain.block.tweaks method with proper JSON-RPC 2.0"""
+        start_time = time.time()
+        
+        try:
+            import socket
+            import json
+            
+            self.logger.debug(f"Making Frigate RPC request to {self.host}:{self.port}")
+            
+            # Create socket connection
+            sock = socket.create_connection((self.host, self.port))
+            
+            try:
+                # Build JSON-RPC 2.0 request with named parameters
+                request = {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "blockchain.silentpayments.tweaks",
+                    "params": {"block_height": block_height}
+                }
+                
+                # Send request
+                message = json.dumps(request) + '\n'
+                sock.sendall(message.encode('utf-8'))
+                
+                # Receive response - handle large responses
+                response_data = b''
+                while True:
+                    chunk = sock.recv(4096)
+                    if not chunk:
+                        break
+                    response_data += chunk
+                    # Check if we have a complete JSON response
+                    try:
+                        response_str = response_data.decode('utf-8').strip()
+                        response = json.loads(response_str)
+                        break  # Successfully parsed complete JSON
+                    except json.JSONDecodeError:
+                        # Need more data
+                        continue
+                
+                if 'error' in response and response['error']:
+                    error_msg = f"Frigate RPC error: {response['error']}"
+                    self.logger.error(error_msg)
+                    
+                    return ServiceResult(
+                        service_name=self.config.name,
+                        block_height=block_height,
+                        tweaks=[],
+                        request_time=time.time() - start_time,
+                        success=False,
+                        error_message=error_msg
+                    )
+                
+                tweaks = self._normalize_response(response.get('result', []), block_height)
+                
+                return ServiceResult(
+                    service_name=self.config.name,
+                    block_height=block_height,
+                    tweaks=tweaks,
+                    request_time=time.time() - start_time,
+                    success=True
+                )
+                
+            finally:
+                sock.close()
+        
+        except Exception as e:
+            error_msg = f"Frigate RPC request error: {str(e)}"
+            self.logger.error(error_msg)
+            
+            return ServiceResult(
+                service_name=self.config.name,
+                block_height=block_height,
+                tweaks=[],
+                request_time=time.time() - start_time,
+                success=False,
+                error_message=error_msg
+            )
+    
+    def _build_rpc_call(self, block_height: int) -> tuple:
+        """Build Frigate specific RPC call - not used since we override get_tweaks_for_block"""
+        return 'blockchain.silentpayments.tweaks', [block_height]
+    
+    def _normalize_response(self, raw_response: Any, block_height: int) -> List[TweakData]:
+        """Normalize Frigate response format"""
+        tweaks = []
+        
+        # Frigate returns array of objects with txid and tweak fields
+        if isinstance(raw_response, list):
+            for i, tweak_data in enumerate(raw_response):
+                if isinstance(tweak_data, dict) and 'txid' in tweak_data and 'tweak' in tweak_data:
+                    tweak = TweakData(
+                        tweak_hash=tweak_data['tweak'],
+                        block_height=block_height,
+                        transaction_id=tweak_data['txid'],
+                        output_index=i,  # Use array index as output index
+                        raw_data=tweak_data
+                    )
+                    tweaks.append(tweak)
+        
+        return tweaks
+
+
 class TweakIndexHTTPService(HTTPIndexService):
     """HTTP Tweak Index service implementation"""
     
@@ -819,6 +927,8 @@ def create_service_instance(config: ServiceConfig, ignore_filter_mismatch: bool 
     elif config.service_type == ServiceType.SOCKET_RPC:
         if 'esplora' in service_name_lower or 'electrs' in service_name_lower:
             return ElectrsRPCService(config)
+        elif 'frigate' in service_name_lower:
+            return FrigateElectrumService(config)
         else:
             return SocketRPCIndexService(config)
     
