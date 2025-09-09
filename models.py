@@ -109,17 +109,18 @@ class AuditResult:
         
         successful_results = [r for r in self.service_results if r.success]
         if len(successful_results) < 2:
+            # If only one service, return its tweaks as "matching"
+            if len(successful_results) == 1:
+                return {tweak.tweak_hash for tweak in successful_results[0].tweaks}
             return set()
         
-        all_tweaks = set()
-        for result in successful_results:
-            all_tweaks.update(tweak.tweak_hash for tweak in result.tweaks)
-
-        matching = set()
-        # Find intersection with all other services
-        for result in successful_results:
+        # Start with first service's tweaks
+        matching = {tweak.tweak_hash for tweak in successful_results[0].tweaks}
+        
+        # Intersect with all other services to find common tweaks
+        for result in successful_results[1:]:
             service_tweaks = {tweak.tweak_hash for tweak in result.tweaks}
-            matching = all_tweaks.intersection(service_tweaks)
+            matching = matching.intersection(service_tweaks)
         
         return matching
     
