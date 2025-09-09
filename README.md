@@ -2,10 +2,21 @@
 
 A Python tool for auditing Silent Payments indexer tweak services to determine which services are producing the most accurate tweak data.
 
+## Recent Updates
+
+**Latest: BlindBit gRPC Support + Test Data Framework**
+- **🚀 BlindBit gRPC Integration**: Native gRPC support with high-performance streaming for efficient bulk block range processing
+- **📊 Test Data Framework**: Compare services against canonical reference data with automatic validation and storage capabilities  
+- **⚡ Enhanced Performance**: Hybrid processing approach - gRPC streaming for BlindBit, optimized batching for other services
+- **🔧 Smart Configuration**: Auto-detection of service pairs, filter mismatch warnings, and intelligent fallback handling
+- **🛠️ New CLI Features**: `--store_test` flag for creating test data, `--ignore-filter-mismatch` for bypassing validation warnings
+
 ## Outline
+- [Recent Updates](#recent-updates)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
 - [Configuration](#configuration)
+  - [Test Data Framework](#test-data-framework)
 - [Usage](#usage)
 - [Core Capabilities](#core-capabilities)
 - [Output Examples](#output-examples)
@@ -19,13 +30,15 @@ A Python tool for auditing Silent Payments indexer tweak services to determine w
 ## Features
 
 - **Multi-service support**: Audit multiple indexing services simultaneously
-- **Flexible connection methods**: Support for HTTP, RPC, and socket-based RPC services
-- **Extensible architecture**: Easy to add new service implementations - blindbit-oracle, esplora-cake, bitcoin-core, electrs supported
+- **Flexible connection methods**: Support for HTTP, RPC, socket-based RPC, and gRPC services
+- **Extensible architecture**: Easy to add new service implementations - blindbit-oracle, blindbit-grpc, esplora-cake, bitcoin-core, electrs supported
 - **Pairwise comparison analysis**: Compare specific service pairs with detailed matching statistics
 - **Range auditing**: Audit single blocks or ranges of blocks
 - **Detailed reporting**: Comprehensive results with statistics and comparisons
 - **Configuration management**: JSON-based configuration with validation
 - **JSON output**: Export audit results to structured JSON files
+- **Test data framework**: Compare against canonical reference data with automatic validation
+- **High-performance streaming**: gRPC streaming support for efficient bulk block processing
 
 ## Installation
 
@@ -47,6 +60,12 @@ A Python tool for auditing Silent Payments indexer tweak services to determine w
 3. **Audit a range of blocks**:
    ```bash
    python main.py range 800000 800010
+   ```
+
+4. **Compare against test data** (using included reference blocks):
+   ```bash
+   # Test bitcoin-core against reference data for block 850000, assumes test_data/block_850000.json exist
+   python main.py block 850000
    ```
 
 ## Configuration
@@ -109,7 +128,7 @@ The configuration file defines services and optional pairwise comparison groups:
 - `port`: Port number (optional, for socket_rpc services)
 - `auth`: Authentication credentials (optional)
 - `headers`: Custom HTTP headers (optional, HTTP/RPC only)
-- `timeout`: Request timeout in seconds (default: 5)
+- `timeout`: Request timeout in seconds (default: 60)
 - `active`: Whether the service is enabled for auditing (default: true)
 - `cookie_file`: Path to a cookie file for authentication (optional, for Bitcoin Core and similar)
 - `requests_per_second`: Maximum requests per second to this service (optional, default: 200)
@@ -167,8 +186,85 @@ Direct socket connections for Esplora Cake and similar services:
 }
 ```
 
+#### gRPC Services (BlindBit)
+High-performance gRPC connections with streaming support:
+```json
+{
+  "name": "blindbit-grpc",
+  "service_type": "grpc",
+  "endpoint": "127.0.0.1:50051",
+  "timeout": 600,
+  "active": true,
+  "requests_per_second": 150,
+  "dust_limit": 0
+}
+```
+
+#### Test Data Services
+Compare against canonical reference data stored locally:
+```json
+{
+  "name": "test_data",
+  "service_type": "test_data",
+  "endpoint": "local",
+  "active": true
+}
+```
+
+### Test Data Framework
+
+The auditor includes a comprehensive test data framework for validating services against canonical reference data:
+
+#### Available Test Blocks
+The `test_data/` directory contains reference data for various block ranges:
+
+**Mainnet Blocks:**
+- `800000-800004`: Mainnet reference blocks for production validation
+
+**Signet Blocks:**
+- `200000-200002`: Early signet blocks with moderate activity
+
+
+#### Test Data Configuration Example
+
+```json
+{
+  "services": [
+    {
+      "name": "bitcoin-core",
+      "service_type": "rpc",
+      "endpoint": "http://127.0.0.1:38332",
+      "cookie_file": "~/work/bitcoin/signet/.cookie",
+      "active": true,
+      "filter_spent": false,
+      "dust_limit": 0
+    }
+  ],
+  "service_pairs": [
+    {
+      "name": "bitcoin_vs_test",
+      "service1": "bitcoin-core", 
+      "service2": "test_data",
+      "active": true
+    }
+  ]
+}
+```
+
+**Note**: When a `service_pairs` entry references a service named `test_data` that doesn't exist in the `services` list, the auditor will automatically create a test_data service if test data files are available.
+
+#### Creating New Test Data
+
+```bash
+# Store results from bitcoin-core as canonical test data
+python main.py block 850000 --store_test bitcoin-core
+
+# Store range results (creates multiple test files)
+python main.py range 850000 850002 --store_test bitcoin-core
+```
+
 ### Defaults
-- `timeout`: 5 seconds if not specified
+- `timeout`: 60 seconds if not specified
 - `active`: true if not specified
 - `requests_per_second`: 200 if not specified
 
@@ -229,6 +325,8 @@ python main.py range 800000 801000 --output large_audit.json
 - `--verbose, -v, -vv`: Enable verbose logging for debugging
 - `--detailed, -d`: Show detailed results including individual tweak hashes
 - `--output, -o`: Save results to JSON file for further analysis
+- `--store_test [service_name]`: Store audit results as canonical test data for future comparisons
+- `--ignore-filter-mismatch`: Ignore filter configuration mismatch warnings between services
 
 ### Services Setup Reference
 

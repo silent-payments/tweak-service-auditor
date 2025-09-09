@@ -51,6 +51,12 @@
       "service1": "esplora-cake",
       "service2": "bitcoin",
       "active": false
+    },
+    {
+      "name": "blindbit-vs-test",
+      "service1": "blindbit",
+      "service2": "test_data",
+      "active": false
     }
   ]
 }
