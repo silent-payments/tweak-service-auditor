@@ -717,16 +717,26 @@ class TestDataIndexService(IndexServiceInterface):
         """Normalize canonical test data format"""
         tweaks = []
         
-        # Canonical test data format has 'tweaks' array with full tweak information
+        # Canonical test data format has 'tweaks' array with tweak information
         if isinstance(raw_response, dict) and 'tweaks' in raw_response:
             for tweak_data in raw_response['tweaks']:
                 if isinstance(tweak_data, dict):
+                    # Use raw_data as-is or create basic structure
+                    raw_data = tweak_data.get('raw_data', {})
+                    if isinstance(raw_data, dict):
+                        # Add redundant fields for compatibility with TweakData expectations
+                        full_raw_data = raw_data.copy()
+                        full_raw_data['tweak'] = tweak_data.get('tweak_hash', '')
+                        full_raw_data['index'] = tweak_data.get('output_index', 0)
+                    else:
+                        full_raw_data = raw_data or {}
+                    
                     tweak = TweakData(
                         tweak_hash=tweak_data.get('tweak_hash', ''),
-                        block_height=tweak_data.get('block_height', block_height),
+                        block_height=block_height,  # Use top-level block_height
                         transaction_id=tweak_data.get('transaction_id', ''),
                         output_index=tweak_data.get('output_index', 0),
-                        raw_data=tweak_data.get('raw_data', tweak_data)
+                        raw_data=full_raw_data
                     )
                     tweaks.append(tweak)
         
@@ -744,6 +754,9 @@ class TestDataIndexService(IndexServiceInterface):
         
         # Compare filter_spent  
         ref_filter_spent = reference_filter_config.get('filter_spent')
+        # Normalize None to False for filter_spent comparison
+        if ref_filter_spent is None:
+            ref_filter_spent = False
         current_filter_spent = self.config.filter_spent
         
         mismatches = []

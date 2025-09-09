@@ -10,27 +10,6 @@
       "dust_limit": 0
     },
     {
-      "name": "blindbit-grpc-spent",
-      "service_type": "grpc",
-      "endpoint": "127.0.0.1:50051",
-      "active": false,
-      "timeout": 600,
-      "requests_per_second": 150,
-      "dust_limit": 0,
-      "filter_spent": true
-    },
-    {
-      "name": "blindbit-spent",
-      "service_type": "http",
-      "endpoint": "http://127.0.0.1:8000/tweaks",
-      "headers": {
-        "User-Agent": "TweakServiceAuditor/1.0"
-      },
-      "active": false,
-      "requests_per_second": 100,
-      "dust_limit": 0
-    },
-    {
       "name": "blindbit",
       "service_type": "http",
       "endpoint": "http://127.0.0.1:8000/tweak-index",

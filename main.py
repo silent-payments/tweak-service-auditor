@@ -122,6 +122,9 @@ def _check_comparison_filter_mismatch(comparison: PairwiseComparison, service_co
         
         ref_dust_limit = reference_filter_config.get('dust_limit')
         ref_filter_spent = reference_filter_config.get('filter_spent')
+        # Normalize None to False for filter_spent comparison
+        if ref_filter_spent is None:
+            ref_filter_spent = False
         
         real_dust_limit = real_service.dust_limit
         real_filter_spent = real_service.filter_spent
@@ -220,26 +223,42 @@ def store_test_data(result: AuditResult, service_configs: List[ServiceConfig], r
             reference_config = config
             break
     
-    # Prepare canonical test data 
+    # Prepare optimized canonical test data 
     test_data = {
         "block_height": result.block_height,
         "reference_service": reference_result.service_name,
         "tweak_count": len(reference_result.tweaks),
         "reference_filter_config": {
             "dust_limit": reference_config.dust_limit if reference_config else None,
-            "filter_spent": reference_config.filter_spent if reference_config else None
+            "filter_spent": reference_config.filter_spent if reference_config and reference_config.filter_spent is not None else False
         },
-        "tweaks": [
-            {
-                "tweak_hash": tweak.tweak_hash,
-                "block_height": tweak.block_height,
-                "transaction_id": tweak.transaction_id,
-                "output_index": tweak.output_index,
-                "raw_data": tweak.raw_data
-            }
-            for tweak in reference_result.tweaks
-        ]
+        "tweaks": []
     }
+    
+    # Build optimized tweak entries
+    for tweak in reference_result.tweaks:
+        optimized_tweak = {
+            "tweak_hash": tweak.tweak_hash,
+            "output_index": tweak.output_index
+        }
+        
+        # Only include raw_data if it has useful information beyond source
+        if tweak.raw_data and isinstance(tweak.raw_data, dict):
+            filtered_raw_data = {}
+            for key, value in tweak.raw_data.items():
+                # Skip redundant and unnecessary fields
+                if key in ['tweak', 'index', 'source']:
+                    continue
+                filtered_raw_data[key] = value
+            
+            if filtered_raw_data:
+                optimized_tweak["raw_data"] = filtered_raw_data
+        
+        # Only include transaction_id if not empty
+        if tweak.transaction_id and tweak.transaction_id.strip():
+            optimized_tweak["transaction_id"] = tweak.transaction_id
+            
+        test_data["tweaks"].append(optimized_tweak)
     
     # Write test data to file
     with open(filepath, 'w') as f:
@@ -418,6 +437,41 @@ async def audit_block_range(args):
             output_file=detailed_output_file
         )
         print_range_result(result, args.detailed, service_pairs)
+        
+        # Store test data if requested
+        store_test_flag = getattr(args, 'store_test', False)
+        if store_test_flag:
+            # Extract reference service name if specified (store_test can be True or a service name)
+            reference_service = store_test_flag if isinstance(store_test_flag, str) else None
+            print(f"\nStoring test data for blocks {args.start_block}-{args.end_block}...")
+            
+            # Store test data for each block that was successfully audited
+            blocks_stored = 0
+            for block_height in range(args.start_block, args.end_block + 1):
+                # Check if this block was successfully audited
+                if hasattr(result, 'detailed_results') and result.detailed_results:
+                    block_result = None
+                    for detailed_result in result.detailed_results:
+                        if detailed_result.block_height == block_height:
+                            block_result = detailed_result
+                            break
+                    
+                    if block_result:
+                        try:
+                            store_test_data(block_result, auditor.services, reference_service)
+                            blocks_stored += 1
+                        except Exception as e:
+                            print(f"Warning: Failed to store test data for block {block_height}: {e}")
+                else:
+                    # If no detailed results available, audit each block individually for storage
+                    try:
+                        individual_result = await auditor.audit_block(block_height)
+                        store_test_data(individual_result, auditor.services, reference_service)
+                        blocks_stored += 1
+                    except Exception as e:
+                        print(f"Warning: Failed to store test data for block {block_height}: {e}")
+            
+            print(f"Stored test data for {blocks_stored} blocks.")
         
         # Create summary output if detailed streaming was used
         if args.output and args.detailed and detailed_output_file != args.output:
