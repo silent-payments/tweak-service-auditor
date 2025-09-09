@@ -345,3 +345,78 @@ class SocketRPCIndexService(IndexServiceInterface):
                     tweaks.append(tweak)
         
         return tweaks
+
+
+class GRPCIndexService(IndexServiceInterface):
+    """gRPC-based indexing service implementation"""
+    
+    def __init__(self, config: ServiceConfig):
+        super().__init__(config)
+        if config.service_type != ServiceType.GRPC:
+            raise ValueError(f"GRPCIndexService requires GRPC service type, got {config.service_type}")
+        
+        # Extract host and port from config
+        if config.host and config.port:
+            self.host = config.host
+            self.port = config.port
+            self.target = f"{self.host}:{self.port}"
+        elif config.endpoint:
+            # Try to parse from endpoint format like "127.0.0.1:50051"
+            try:
+                if '://' in config.endpoint:
+                    # Remove protocol if present
+                    endpoint = config.endpoint.split('://', 1)[1]
+                else:
+                    endpoint = config.endpoint
+                
+                if ':' in endpoint:
+                    self.host, port_str = endpoint.rsplit(':', 1)
+                    self.port = int(port_str)
+                    self.target = f"{self.host}:{self.port}"
+                else:
+                    raise ValueError("Port not specified")
+            except (ValueError, IndexError):
+                raise ValueError(f"Invalid endpoint format for gRPC: {config.endpoint}. Use 'host:port' format")
+        else:
+            raise ValueError("Either 'host' and 'port' or 'endpoint' must be specified for gRPC")
+        
+        self.channel = None
+    
+    async def get_tweaks_for_block(self, block_height: int) -> ServiceResult:
+        """Get tweaks via gRPC request - to be implemented by specific gRPC services"""
+        raise NotImplementedError("Subclasses must implement get_tweaks_for_block")
+    
+    def _get_channel(self):
+        """Get or create a gRPC channel"""
+        import grpc
+        
+        if self.channel is None:
+            # Create insecure channel for now (no auth requirement from user)
+            self.channel = grpc.insecure_channel(self.target)
+        return self.channel
+    
+    def _close_channel(self):
+        """Close the gRPC channel"""
+        if hasattr(self, 'channel') and self.channel:
+            self.channel.close()
+            self.channel = None
+    
+    def _normalize_response(self, raw_response: Any, block_height: int) -> List[TweakData]:
+        """Default normalization - to be overridden by specific implementations"""
+        # This is a placeholder implementation
+        # Each specific gRPC service will override this method
+        tweaks = []
+        
+        # Handle protobuf response format
+        if hasattr(raw_response, 'tweaks'):
+            for i, tweak_bytes in enumerate(raw_response.tweaks):
+                tweak = TweakData(
+                    tweak_hash=tweak_bytes.hex() if isinstance(tweak_bytes, bytes) else str(tweak_bytes),
+                    block_height=block_height,
+                    transaction_id='',  # Not available in basic tweak response
+                    output_index=i,     # Use index as placeholder
+                    raw_data={'tweak_bytes': tweak_bytes}
+                )
+                tweaks.append(tweak)
+        
+        return tweaks

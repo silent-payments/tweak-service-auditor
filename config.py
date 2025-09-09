@@ -3,6 +3,7 @@ Configuration management for Silent Payments Tweak Service Auditor
 """
 import json
 import os
+from pathlib import Path
 from typing import List, Optional
 from models import ServiceConfig, ServiceType, ServicePair
 
@@ -36,10 +37,10 @@ class ConfigManager:
                 service_config = ServiceConfig(
                     name=service_data['name'],
                     service_type=ServiceType(service_data.get('service_type', None)),
-                    endpoint=service_data['endpoint'],
+                    endpoint=service_data.get('endpoint', ''),
                     auth=service_data.get('auth'),
                     headers=service_data.get('headers'),
-                    timeout=service_data.get('timeout', 5),
+                    timeout=service_data.get('timeout', 60),
                     host=service_data.get('host'),
                     port=service_data.get('port'),
                     cookie_file=service_data.get('cookie_file'),
@@ -60,9 +61,49 @@ class ConfigManager:
                     active=pair_data.get('active', True)
                 )
                 self.service_pairs.append(service_pair)
+            
+            # Auto-create test_data services from service_pairs if they don't exist
+            self._auto_create_test_data_services()
                 
         except Exception as e:
             raise ValueError(f"Failed to load config from {self.config_file}: {e}")
+
+    def _auto_create_test_data_services(self):
+        """Auto-create test_data services for service_pairs references that don't exist"""
+        if not self.service_pairs:
+            return
+            
+        # Get existing service names and active service names
+        existing_service_names = {service.name for service in self.services}
+        
+        # Find services referenced in pairs that don't exist
+        missing_services = set()
+        for pair in self.service_pairs:
+            if pair.active:
+                if pair.service1 not in existing_service_names:
+                    missing_services.add(pair.service1)
+                if pair.service2 not in existing_service_names:
+                    missing_services.add(pair.service2)
+        
+        # Check if test_data directory exists
+        test_data_dir = Path("test_data")
+        if not test_data_dir.exists():
+            return  # No test data available
+        
+        # Auto-create test_data services for missing services that have test data
+        for missing_service in missing_services:
+            # Check if any test data files exist that could be used by this service
+            test_files = list(test_data_dir.glob("block_*.json"))
+            if test_files:
+                # Create a test_data service
+                auto_service = ServiceConfig(
+                    name="test_data",
+                    service_type=ServiceType.TEST_DATA,
+                    endpoint="local",
+                    active=True
+                )
+                self.services.append(auto_service)
+                print(f"Auto-created test_data service: {missing_service}")
 
     def validate_config(self) -> List[str]:
         """Validate current configuration and return list of issues"""
@@ -85,12 +126,15 @@ class ConfigManager:
             if not service.service_type.value:
                 issues.append(f"Service '{service.name}': Missing service_type")
 
-            if not service.endpoint:
+            # Endpoint is optional for test_data services (specifies which service data to read)
+            if not service.endpoint and service.service_type != ServiceType.TEST_DATA:
                 issues.append(f"Service '{service.name}': Missing endpoint")
             
         # Validate service pairs
         pair_names = []
         for i, pair in enumerate(self.service_pairs):
+            if not pair.active:
+                continue
             if not pair.name:
                 issues.append(f"Service pair {i}: Missing name")
             elif pair.name in pair_names:

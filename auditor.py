@@ -8,7 +8,7 @@ from typing import List, Optional
 import time
 import json
 
-from models import ServiceConfig, AuditResult, RangeAuditResult, ServiceResult
+from models import ServiceConfig, AuditResult, RangeAuditResult, ServiceResult, ServiceType
 from service_interface import IndexServiceInterface
 from service_implementations import create_service_instance
 from rate_limiter import RangeAuditRateLimiter
@@ -18,7 +18,7 @@ class TweakServiceAuditor:
     """Main auditor class for Silent Payments tweak services"""
     
     def __init__(self, services: List[ServiceConfig], enable_rate_limiting: bool = True, 
-                 inter_block_delay: float = 0.0001):
+                 inter_block_delay: float = 0.0001, ignore_filter_mismatch: bool = False):
         """
         Initialize the auditor with a list of service configurations
         
@@ -26,11 +26,13 @@ class TweakServiceAuditor:
             services: List of ServiceConfig objects
             enable_rate_limiting: Whether to enable rate limiting (default: True)
             inter_block_delay: Delay between blocks in range audits (default: 0.0001s)
+            ignore_filter_mismatch: Whether to ignore filter config mismatches (default: False)
         """
         self.services = services
         self.service_instances: List[IndexServiceInterface] = []
         self.logger = logging.getLogger("auditor")
         self.enable_rate_limiting = enable_rate_limiting
+        self.ignore_filter_mismatch = ignore_filter_mismatch
         
         # Initialize rate limiter
         self.rate_limiter = RangeAuditRateLimiter(inter_block_delay=inter_block_delay)
@@ -38,7 +40,7 @@ class TweakServiceAuditor:
         # Initialize service instances using factory function
         for config in services:
             if config.active:
-                service_instance = create_service_instance(config)
+                service_instance = create_service_instance(config, ignore_filter_mismatch)
                 self.service_instances.append(service_instance)
                 
                 # Configure rate limiting for this service
@@ -131,7 +133,9 @@ class TweakServiceAuditor:
     async def audit_range(self, start_block: int, end_block: int, batch_size: int = 200, 
                          output_file: Optional[str] = None) -> RangeAuditResult:
         """
-        Audit a range of blocks using streaming approach to minimize memory usage
+        Audit a range of blocks using optimal strategy per service:
+        - BlindBit gRPC: Uses StreamBlockBatchSlim streaming for efficiency
+        - All others: Individual block requests with memory-efficient batching
         
         Args:
             start_block: Starting block height (inclusive)
@@ -142,10 +146,23 @@ class TweakServiceAuditor:
         Returns:
             RangeAuditResult containing summary data only (not full block results)
         """
-        self.logger.info(f"Starting streaming range audit from block {start_block} to {end_block} (batch_size={batch_size})")
+        self.logger.info(f"Starting range audit from block {start_block} to {end_block} (batch_size={batch_size})")
         
         if start_block > end_block:
             raise ValueError("Start block must be <= end block")
+        
+        # Separate services into streaming and non-streaming
+        streaming_services = []
+        non_streaming_services = []
+        
+        for service in self.service_instances:
+            # Check if service supports streaming (only BlindBit gRPC for now)
+            if 'blindbit' in service.config.name.lower() and service.config.service_type == ServiceType.GRPC:
+                streaming_services.append(service)
+            else:
+                non_streaming_services.append(service)
+        
+        self.logger.info(f"Using streaming for {len(streaming_services)} services, batched requests for {len(non_streaming_services)} services")
         
         # Initialize summary tracking
         total_blocks_processed = 0
@@ -159,8 +176,36 @@ class TweakServiceAuditor:
             output_handle.write('{"blocks":[')
             first_block = True
         
+        # Process streaming services first (BlindBit gRPC)
+        streaming_results_dict = {}
+        for service in streaming_services:
+            try:
+                self.logger.debug(f"Getting streaming results for {service.config.name}")
+                if self.enable_rate_limiting:
+                    # Acquire rate limit token for the entire range
+                    await self.rate_limiter.acquire_service_token(service.config.name)
+                
+                stream_results = await service.get_tweaks_for_range_stream(start_block, end_block)
+                
+                if not stream_results:
+                    self.logger.error(f"Streaming failed for {service.config.name}, falling back to individual requests")
+                    # Fall back to individual requests for this service
+                    non_streaming_services.append(service)
+                else:
+                    # Add streaming results organized by block height
+                    for result in stream_results:
+                        block_height = result.block_height
+                        if block_height not in streaming_results_dict:
+                            streaming_results_dict[block_height] = []
+                        streaming_results_dict[block_height].append(result)
+                        
+            except Exception as e:
+                self.logger.error(f"Streaming service {service.config.name} failed: {e}, falling back to individual requests")
+                # Fall back to individual requests for this service
+                non_streaming_services.append(service)
+        
         try:
-            # Process blocks in batches
+            # Process non-streaming services in batches for memory efficiency
             for batch_start in range(start_block, end_block + 1, batch_size):
                 batch_end = min(batch_start + batch_size - 1, end_block)
                 self.logger.info(f"Processing batch: blocks {batch_start}-{batch_end}")
@@ -170,18 +215,62 @@ class TweakServiceAuditor:
                 # Process each block in the batch
                 for block_height in range(batch_start, batch_end + 1):
                     try:
-                        result = await self.audit_block(block_height)
-                        batch_results.append(result)
+                        # Combine streaming results with non-streaming results for this block
+                        combined_service_results = []
+                        
+                        # Add streaming results if available
+                        if block_height in streaming_results_dict:
+                            combined_service_results.extend(streaming_results_dict[block_height])
+                        
+                        # Process non-streaming services for this block
+                        if non_streaming_services:
+                            tasks = []
+                            for service in non_streaming_services:
+                                if self.enable_rate_limiting:
+                                    task = self._rate_limited_service_call(service, block_height)
+                                else:
+                                    task = service.get_tweaks_for_block(block_height)
+                                tasks.append(task)
+                            
+                            # Wait for all non-streaming services to complete
+                            service_results = await asyncio.gather(*tasks, return_exceptions=True)
+                            
+                            # Handle any exceptions
+                            for i, result in enumerate(service_results):
+                                if isinstance(result, Exception):
+                                    self.logger.error(f"Service {non_streaming_services[i].config.name} failed for block {block_height}: {result}")
+                                    # Create a failed ServiceResult
+                                    failed_result = ServiceResult(
+                                        service_name=non_streaming_services[i].config.name,
+                                        block_height=block_height,
+                                        tweaks=[],
+                                        request_time=0.0,
+                                        success=False,
+                                        error_message=str(result)
+                                    )
+                                    combined_service_results.append(failed_result)
+                                else:
+                                    combined_service_results.append(result)
+                        
+                        # Create audit result for this block
+                        audit_result = AuditResult(
+                            block_height=block_height,
+                            service_results=combined_service_results,
+                            total_services=len(self.service_instances),
+                            successful_services=sum(1 for r in combined_service_results if r.success)
+                        )
+                        
+                        batch_results.append(audit_result)
                         total_blocks_processed += 1
                         
                         # Update service summary
-                        self._update_service_summary(result, service_summary, total_request_times)
+                        self._update_service_summary(audit_result, service_summary, total_request_times)
                         
                         # Stream to output file if specified
                         if output_handle:
                             if not first_block:
                                 output_handle.write(',')
-                            self._write_block_result_to_stream(result, output_handle)
+                            self._write_block_result_to_stream(audit_result, output_handle)
                             first_block = False
                             
                     except Exception as e:
@@ -191,6 +280,11 @@ class TweakServiceAuditor:
                 # Log batch completion and clear batch results to free memory
                 self.logger.info(f"Completed batch {batch_start}-{batch_end}: {len(batch_results)} blocks")
                 batch_results.clear()  # Free memory immediately
+                
+                # Clear processed streaming results to free memory
+                for block_height in range(batch_start, batch_end + 1):
+                    if block_height in streaming_results_dict:
+                        del streaming_results_dict[block_height]
         
         finally:
             if output_handle:
@@ -207,7 +301,7 @@ class TweakServiceAuditor:
             _total_blocks_audited=total_blocks_processed
         )
         
-        self.logger.info(f"Completed streaming range audit: {total_blocks_processed} blocks processed")
+        self.logger.info(f"Completed range audit: {total_blocks_processed} blocks processed")
         self._log_range_summary(range_result)
         
         return range_result
