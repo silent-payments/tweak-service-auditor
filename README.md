@@ -360,7 +360,7 @@ go run ./src
 - **Performance tracking**: Request timing and success rate monitoring
 
 ### Comparison Analysis
-- **Cross-service comparison**: Identify matching and unique tweaks across all services
+- **Cross-service comparison**: Identify tweaks present in ALL services (intersection-based matching)
 - **Pairwise analysis**: Detailed comparison between specific service pairs
 - **Match percentage calculation**: Statistical analysis of service agreement
 - **Unique tweak identification**: Highlight tweaks found by only one service
@@ -515,10 +515,11 @@ When using `--output`, results are saved in structured JSON format for further a
 
 To add support for a new indexing service:
 
-1. **Create a new service implementation** extending either `HTTPIndexService` or `RPCIndexService`
+1. **Create a new service implementation** extending `HTTPIndexService`, `RPCIndexService`, or `SocketRPCIndexService`
 2. **Implement required methods**:
-   - `_build_url()` or `_build_rpc_payload()`: Construct service-specific requests
+   - `_build_url()`, `_build_rpc_payload()`, or `_build_rpc_call()`: Construct service-specific requests
    - `_normalize_response()`: Convert service response to standard `TweakData` format
+3. **Add service detection** in `create_service_instance()` factory function
 
 ## Logging and Error Handling
 
