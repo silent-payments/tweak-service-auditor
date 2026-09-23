@@ -27,6 +27,10 @@ services *args:
 validate:
     {{PY}} main.py config --validate
 
+# Run tests (runs against service endpoints when configured via ENDPOINT env vars)
+test *args:
+    {{PY}} -m unittest discover tests {{args}}
+
 # copy sample config to running config.json
 make-config:
     cp sample.config.json config.json

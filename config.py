@@ -3,13 +3,88 @@ Configuration management for Silent Payments Tweak Service Auditor
 """
 import json
 import os
+import re
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Any, Dict
 from models import ServiceConfig, ServiceType, ServicePair
+
+# Canonical environment variable mappings for automatic discovery and overrides
+ENV_SERVICE_MAPPINGS: Dict[str, Dict[str, Any]] = {
+    "RBITCOIN_ENDPOINT": {
+        "service_name": "rbitcoin",
+        "service_type": ServiceType.SOCKET_RPC,
+        "default_timeout": 30,
+    },
+    "BLINDBIT_GRPC_ENDPOINT": {
+        "service_name": "blindbit-grpc",
+        "service_type": ServiceType.GRPC,
+        "default_timeout": 60,
+        "requests_per_second": 150,
+        "dust_limit": 0,
+    },
+    "BLINDBIT_HTTP_ENDPOINT": {
+        "service_name": "blindbit",
+        "service_type": ServiceType.HTTP,
+        "default_timeout": 30,
+        "headers": {"User-Agent": "TweakServiceAuditor/1.0"},
+        "requests_per_second": 100,
+    },
+    "ESPLORA_ENDPOINT": {
+        "service_name": "esplora-cake",
+        "service_type": ServiceType.SOCKET_RPC,
+        "default_timeout": 30,
+    },
+    "ELECTRS_ENDPOINT": {
+        "service_name": "electrs",
+        "service_type": ServiceType.SOCKET_RPC,
+        "default_timeout": 30,
+    },
+    "BITCOIN_RPC_ENDPOINT": {
+        "service_name": "bitcoin",
+        "service_type": ServiceType.RPC,
+        "default_timeout": 60,
+        "headers": {"User-Agent": "TweakServiceAuditor/1.0"},
+    },
+}
+
+# Service name to environment variable override mappings
+SERVICE_ENV_VAR_MAPPINGS: Dict[str, str] = {
+    "rbitcoin": "RBITCOIN_ENDPOINT",
+    "rbitcoin-node": "RBITCOIN_ENDPOINT",
+    "rbitcoin-signet": "RBITCOIN_ENDPOINT",
+    "blindbit-grpc": "BLINDBIT_GRPC_ENDPOINT",
+    "blindbit": "BLINDBIT_HTTP_ENDPOINT",
+    "blindbit-oracle": "BLINDBIT_HTTP_ENDPOINT",
+    "esplora-cake": "ESPLORA_ENDPOINT",
+    "electrs": "ELECTRS_ENDPOINT",
+    "bitcoin": "BITCOIN_RPC_ENDPOINT",
+    "bitcoind": "BITCOIN_RPC_ENDPOINT",
+}
+
+
+def expand_env_vars(val: Any) -> Any:
+    """Recursively expands ${VAR:-default}, ${VAR}, and $VAR in strings and collections."""
+    if isinstance(val, str):
+        def replace_match(match):
+            var_name = match.group(1) or match.group(3)
+            default_val = match.group(2) if match.group(2) is not None else ""
+            return os.environ.get(var_name, default_val)
+
+        pattern = re.compile(r'\$\{([A-Za-z0-9_]+)(?::-([^}]*))?\}|\$([A-Za-z0-9_]+)')
+        return pattern.sub(replace_match, val)
+    elif isinstance(val, dict):
+        return {k: expand_env_vars(v) for k, v in val.items()}
+    elif isinstance(val, list):
+        return [expand_env_vars(item) for item in val]
+    return val
 
 
 class ConfigManager:
-    """Manages configuration for the auditor"""
+    """Manages configuration for the auditor with 3-tier hierarchy:
+    Tier 1: Dynamic environment variable override (e.g. RBITCOIN_ENDPOINT overrides JSON endpoint)
+    Tier 2: Environment variable expansion in JSON (${VAR:-default})
+    Tier 3: Pure environment auto-discovery if config file does not exist
+    """
     
     def __init__(self, config_file: Optional[str] = None):
         """
@@ -24,27 +99,80 @@ class ConfigManager:
         
         if os.path.exists(self.config_file):
             self.load_config()
+        else:
+            self.load_from_environment()
+
+    def load_from_environment(self) -> None:
+        """Tier 3: Auto-discover services and comparison pairs from environment variables"""
+        self.services = []
+        self.service_pairs = []
+
+        for env_var, meta in ENV_SERVICE_MAPPINGS.items():
+            endpoint_val = os.getenv(env_var)
+            if endpoint_val:
+                service_config = ServiceConfig(
+                    name=meta["service_name"],
+                    service_type=meta["service_type"],
+                    endpoint=endpoint_val,
+                    timeout=meta.get("default_timeout", 30),
+                    headers=meta.get("headers"),
+                    requests_per_second=meta.get("requests_per_second", 200),
+                    dust_limit=meta.get("dust_limit"),
+                    active=True
+                )
+                self.services.append(service_config)
+
+        # If 2 or more active services were auto-discovered, automatically create pairs
+        active_names = [s.name for s in self.services if s.active]
+        if len(active_names) >= 2:
+            for i in range(len(active_names)):
+                for j in range(i + 1, len(active_names)):
+                    name1, name2 = active_names[i], active_names[j]
+                    self.service_pairs.append(
+                        ServicePair(
+                            name=f"{name1}-vs-{name2}",
+                            service1=name1,
+                            service2=name2,
+                            active=True
+                        )
+                    )
+
+        # Auto-create test_data services if test_data files exist
+        self._auto_create_test_data_services()
     
     def load_config(self) -> None:
-        """Load configuration from file"""
+        """Load configuration from file applying Tier 1 and Tier 2 resolution"""
         try:
             with open(self.config_file, 'r') as f:
-                config_data = json.load(f)
+                raw_config_data = json.load(f)
+
+            # Tier 2: Expand environment variables in JSON structure
+            config_data = expand_env_vars(raw_config_data)
             
             # Load services
             self.services = []
             for service_data in config_data.get('services', []):
+                service_name = service_data['name']
+                endpoint = service_data.get('endpoint', '')
+                active = service_data.get('active', True)
+
+                # Tier 1: Dynamic override if specific environment variable is set
+                env_var = SERVICE_ENV_VAR_MAPPINGS.get(service_name.lower())
+                if env_var and os.getenv(env_var):
+                    endpoint = os.getenv(env_var)
+                    active = True
+
                 service_config = ServiceConfig(
-                    name=service_data['name'],
+                    name=service_name,
                     service_type=ServiceType(service_data.get('service_type', None)),
-                    endpoint=service_data.get('endpoint', ''),
+                    endpoint=endpoint,
                     auth=service_data.get('auth'),
                     headers=service_data.get('headers'),
                     timeout=service_data.get('timeout', 60),
                     host=service_data.get('host'),
                     port=service_data.get('port'),
                     cookie_file=service_data.get('cookie_file'),
-                    active=service_data.get('active'),
+                    active=active,
                     requests_per_second=service_data.get('requests_per_second', 200),
                     filter_spent=service_data.get('filter_spent'),
                     dust_limit=service_data.get('dust_limit')
@@ -103,7 +231,6 @@ class ConfigManager:
                     active=True
                 )
                 self.services.append(auto_service)
-                print(f"Auto-created test_data service: {missing_service}")
 
     def validate_config(self) -> List[str]:
         """Validate current configuration and return list of issues"""
@@ -158,7 +285,7 @@ class ConfigManager:
         print("Configured services:")
         for service in self.services:
             status = "" if service.active else " - inactive"
-            print(f"  {service.name} ({service.service_type.value}): {service.endpoint} {status}")
+            print(f"  {service.name} ({service.service_type.value}): {service.endpoint}{status}")
         
         if self.service_pairs:
             print(f"\nConfigured service pairs:")

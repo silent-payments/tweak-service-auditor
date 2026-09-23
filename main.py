@@ -341,7 +341,7 @@ async def _audit_common_config(args):
     """Shared config and validation logic for audit commands."""
     config_manager = ConfigManager(args.config)
     if not config_manager.services:
-        print("Error: No services configured. Use -c or copy sample.config.json to config.json")
+        print("Error: No services configured. Set endpoint environment variables (e.g. RBITCOIN_ENDPOINT) or copy sample.config.json to config.json")
         return None, None, 1
     issues = config_manager.validate_config()
     if issues:
