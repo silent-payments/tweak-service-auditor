@@ -179,6 +179,25 @@ just range 200000 200010
 just range -d -vv 200000 200010 -o range_summary.json
 ```
 
+#### Frigate Canary Probe (Remote Scanner Audit)
+Audit Sparrow's Frigate BIP 352 Electrum server without raw tweak endpoints using reverse-derived canary keys:
+
+```bash
+# Random sample of 5 candidate transactions in block 850000
+FRIGATE_ENDPOINT="127.0.0.1:57001" BLINDBIT_GRPC_ENDPOINT="127.0.0.1:51051" \
+just probe-frigate 850000 --sample 5
+
+# Audit all candidate transactions in the block
+just probe-frigate 850000 --all
+
+# Audit a specific candidate transaction index (0-based)
+just probe-frigate 850000 --index 0
+
+# Probe with explicit tweak and output pubkeys
+FRIGATE_ENDPOINT="127.0.0.1:57001" \
+just probe-frigate 850000 --tweak <A_sum> --output <P>
+```
+
 ---
 
 ## Testing

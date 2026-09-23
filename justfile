@@ -1,7 +1,7 @@
 # Prefer venv python if available
 PY := `if [ -x ".venv/bin/python" ]; then echo ".venv/bin/python"; else command -v python3; fi`
 
-default: 
+default:
     just --list
 
 # Audit a single block
@@ -26,6 +26,15 @@ services *args:
 
 validate:
     {{PY}} main.py config --validate
+
+# Probe Frigate using canary key reverse-derivation against BlindBit or explicit tweaks
+# Usage:
+#   just probe-frigate 850000 --index 0
+#   just probe-frigate 850000 --sample 5
+#   just probe-frigate 850000 --all
+#   FRIGATE_ENDPOINT="127.0.0.1:57001" BLINDBIT_GRPC_ENDPOINT="127.0.0.1:51051" just probe-frigate 850000 --sample 5
+probe-frigate *args:
+    {{PY}} frigate_probe.py {{args}}
 
 # Run tests (runs against service endpoints when configured via ENDPOINT env vars)
 test *args:
