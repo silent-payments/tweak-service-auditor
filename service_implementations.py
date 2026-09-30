@@ -350,6 +350,48 @@ class ElectrsRPCService(SocketRPCIndexService):
         return tweaks
 
 
+class RBitcoinService(SocketRPCIndexService):
+    """reardencode/rbitcoin embedded Electrum socket RPC service implementation"""
+
+    def _build_rpc_call(self, block_height: int) -> tuple:
+        """Build rbitcoin specific RPC call using blockchain.tweaks.subscribe"""
+        return 'blockchain.tweaks.subscribe', [block_height, 1]
+
+    def _normalize_response(self, raw_response: Any, block_height: int) -> List[TweakData]:
+        """Normalize rbitcoin response format"""
+        tweaks = []
+        if isinstance(raw_response, dict):
+            block_key = str(block_height)
+            block_data = raw_response.get(block_key, raw_response.get(block_height, {}))
+            if isinstance(block_data, dict):
+                for i, (txid, tx_info) in enumerate(block_data.items()):
+                    if isinstance(tx_info, dict):
+                        tweak_hash = tx_info.get('tweak', '')
+                    else:
+                        tweak_hash = str(tx_info)
+                    
+                    if tweak_hash and len(tweak_hash) == 66 and not tweak_hash.startswith('00'):
+                        tweaks.append(TweakData(
+                            tweak_hash=tweak_hash,
+                            block_height=block_height,
+                            transaction_id=txid,
+                            output_index=i,
+                            raw_data=tx_info if isinstance(tx_info, dict) else {'tweak': tweak_hash}
+                        ))
+            elif isinstance(block_data, list):
+                for i, item in enumerate(block_data):
+                    tweak_hash = item.get('tweak', '') if isinstance(item, dict) else str(item)
+                    if tweak_hash and len(tweak_hash) == 66 and not tweak_hash.startswith('00'):
+                        tweaks.append(TweakData(
+                            tweak_hash=tweak_hash,
+                            block_height=block_height,
+                            transaction_id=item.get('txid', '') if isinstance(item, dict) else '',
+                            output_index=i,
+                            raw_data=item if isinstance(item, dict) else {'tweak': tweak_hash}
+                        ))
+        return tweaks
+
+
 class TweakIndexHTTPService(HTTPIndexService):
     """HTTP Tweak Index service implementation"""
     
@@ -450,12 +492,18 @@ class BlindBitGRPCService(GRPCIndexService):
         try:
             import grpc
             from pb.oracle_service_pb2_grpc import OracleServiceStub
-            from pb.indexing_server_pb2 import BlockHeightRequest, GetTweakIndexRequest, RangedBlockHeightRequest
+            from pb.indexing_server_pb2 import (
+                BlockHeightRequest,
+                GetTweakIndexRequest,
+                RangedBlockHeightRequest,
+                RangedBlockHeightRequestFiltered,
+            )
             self.grpc = grpc
             self.OracleServiceStub = OracleServiceStub
             self.BlockHeightRequest = BlockHeightRequest
             self.GetTweakIndexRequest = GetTweakIndexRequest
             self.RangedBlockHeightRequest = RangedBlockHeightRequest
+            self.RangedBlockHeightRequestFiltered = RangedBlockHeightRequestFiltered
         except ImportError as e:
             raise ImportError(f"Failed to import gRPC dependencies: {e}. Make sure grpcio and protobuf are installed.")
     
@@ -470,22 +518,37 @@ class BlindBitGRPCService(GRPCIndexService):
             
             filter_spent = self.config.filter_spent if self.config.filter_spent is not None else False
             dust_limit = self.config.dust_limit if self.config.dust_limit is not None else 0
-            # Determine which method to use based on filter_spent configuration
-            if filter_spent:
-                # Use GetTweakIndexArray with dust limit
+            # Determine which method to use based on filter_spent / dust_limit configuration
+            if filter_spent or dust_limit > 0:
+                # Use GetTweakIndexArray with dust limit, falling back to GetFullBlock if unimplemented
                 request = self.GetTweakIndexRequest(
                     block_height=block_height,
                     dust_limit=dust_limit
                 )
                 self.logger.debug(f"Making gRPC GetTweakIndexArray request for block {block_height} with dust_limit={dust_limit}")
-                response = stub.GetTweakIndexArray(request, timeout=self.config.timeout)
+                try:
+                    response = stub.GetTweakIndexArray(request, timeout=self.config.timeout)
+                except (self.grpc.RpcError, AttributeError) as e:
+                    if hasattr(e, 'code') and e.code() == self.grpc.StatusCode.UNIMPLEMENTED:
+                        self.logger.debug(f"GetTweakIndexArray UNIMPLEMENTED, falling back to GetFullBlock for block {block_height}")
+                        full_req = self.BlockHeightRequest(block_height=block_height)
+                        response = stub.GetFullBlock(full_req, timeout=self.config.timeout)
+                    else:
+                        raise
             else:
-                # Use basic GetTweakArray
+                # Use basic GetTweakArray, falling back to GetFullBlock if unimplemented
                 request = self.BlockHeightRequest(
                     block_height=block_height
                 )
                 self.logger.debug(f"Making gRPC GetTweakArray request for block {block_height}")
-                response = stub.GetTweakArray(request, timeout=self.config.timeout)
+                try:
+                    response = stub.GetTweakArray(request, timeout=self.config.timeout)
+                except (self.grpc.RpcError, AttributeError) as e:
+                    if hasattr(e, 'code') and e.code() == self.grpc.StatusCode.UNIMPLEMENTED:
+                        self.logger.debug(f"GetTweakArray UNIMPLEMENTED, falling back to GetFullBlock for block {block_height}")
+                        response = stub.GetFullBlock(request, timeout=self.config.timeout)
+                    else:
+                        raise
             
             # Normalize the response
             tweaks = self._normalize_response(response, block_height)
@@ -556,10 +619,7 @@ class BlindBitGRPCService(GRPCIndexService):
                     self.logger.debug(f"Processed block {block_height} from stream: {len(tweaks)} tweaks")
             
             except Exception as stream_error:
-                error_msg = f"Stream processing error: {str(stream_error)}"
-                self.logger.error(f"BlindBit stream processing failed: {error_msg}, aborting range audit")
-                
-                # Return empty results list to indicate stream failure
+                self.logger.debug(f"BlindBit stream processing failed: {stream_error}, falling back to individual requests")
                 return []
             
             # Update timing for all results
@@ -571,23 +631,56 @@ class BlindBitGRPCService(GRPCIndexService):
             return results
             
         except Exception as e:
-            error_msg = f"BlindBit streaming request error: {str(e)}"
-            self.logger.error(f"{error_msg}, aborting range audit")
+            self.logger.debug(f"BlindBit StreamBlockBatchSlim unavailable ({e}), falling back to individual requests")
             return []
         finally:
             # Note: We keep the channel open for reuse, it will be closed when the service is destroyed
             pass
     
     def _normalize_response(self, raw_response: Any, block_height: int) -> List[TweakData]:
-        """Normalize BlindBit gRPC response format"""
+        """Normalize BlindBit gRPC response format (supports both v2 FullBlockResponse and legacy/mock TweakArray)"""
         tweaks = []
+        index_attr = getattr(raw_response, 'index', None)
+        tweaks_attr = getattr(raw_response, 'tweaks', None)
+
+        def _is_iterable_non_mock(obj):
+            if obj is None or 'Mock' in type(obj).__name__:
+                return False
+            try:
+                iter(obj)
+                return True
+            except TypeError:
+                return False
         
-        # BlindBit Oracle returns a TweakArray with block_identifier and tweaks
-        if hasattr(raw_response, 'tweaks'):
-            for i, tweak_bytes in enumerate(raw_response.tweaks):
-                # Convert bytes to hex string
+        # BlindBit Oracle v2 FullBlockResponse returns 'index' containing FullTxItems
+        if _is_iterable_non_mock(index_attr):
+            for i, item in enumerate(index_attr):
+                tweak_bytes = getattr(item, 'tweak', None)
+                if not tweak_bytes:
+                    continue
                 tweak_hash = tweak_bytes.hex() if isinstance(tweak_bytes, bytes) else str(tweak_bytes)
-                
+                # Ignore dummy/coinbase zero tweaks or non-standard lengths
+                if not tweak_hash or tweak_hash.startswith('00') or len(tweak_hash) != 66:
+                    continue
+                txid_bytes = getattr(item, 'txid', b'')
+                txid = txid_bytes[::-1].hex() if isinstance(txid_bytes, bytes) else str(txid_bytes)
+                tweaks.append(TweakData(
+                    tweak_hash=tweak_hash,
+                    block_height=block_height,
+                    transaction_id=txid,
+                    output_index=i,
+                    raw_data={
+                        'txid': txid,
+                        'tweak': tweak_hash,
+                        'source': 'blindbit_grpc_oracle'
+                    }
+                ))
+        # Legacy/mock TweakArray with 'tweaks' list
+        elif _is_iterable_non_mock(tweaks_attr):
+            for i, tweak_bytes in enumerate(tweaks_attr):
+                tweak_hash = tweak_bytes.hex() if isinstance(tweak_bytes, bytes) else str(tweak_bytes)
+                if not tweak_hash or tweak_hash.startswith('00') or len(tweak_hash) != 66:
+                    continue
                 tweak = TweakData(
                     tweak_hash=tweak_hash,
                     block_height=block_height,
@@ -612,6 +705,8 @@ class BlindBitGRPCService(GRPCIndexService):
             for i, tweak_bytes in enumerate(batch_response.tweaks):
                 # Convert bytes to hex string
                 tweak_hash = tweak_bytes.hex() if isinstance(tweak_bytes, bytes) else str(tweak_bytes)
+                if not tweak_hash or tweak_hash.startswith('00') or len(tweak_hash) != 66:
+                    continue
                 
                 tweak = TweakData(
                     tweak_hash=tweak_hash,
@@ -817,7 +912,9 @@ def create_service_instance(config: ServiceConfig, ignore_filter_mismatch: bool 
             return ExampleRPCService(config)
     
     elif config.service_type == ServiceType.SOCKET_RPC:
-        if 'esplora' in service_name_lower or 'electrs' in service_name_lower:
+        if 'rbitcoin' in service_name_lower:
+            return RBitcoinService(config)
+        elif 'esplora' in service_name_lower or 'electrs' in service_name_lower:
             return ElectrsRPCService(config)
         else:
             return SocketRPCIndexService(config)

@@ -188,7 +188,7 @@ class TweakServiceAuditor:
                 stream_results = await service.get_tweaks_for_range_stream(start_block, end_block)
                 
                 if not stream_results:
-                    self.logger.error(f"Streaming failed for {service.config.name}, falling back to individual requests")
+                    self.logger.info(f"Streaming not available for {service.config.name}, falling back to individual requests")
                     # Fall back to individual requests for this service
                     non_streaming_services.append(service)
                 else:

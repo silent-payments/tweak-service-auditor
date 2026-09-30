@@ -1,50 +1,72 @@
 {
   "services": [
     {
+      "name": "rbitcoin",
+      "service_type": "socket_rpc",
+      "endpoint": "${RBITCOIN_ENDPOINT:-127.0.0.1:51001}",
+      "active": true,
+      "timeout": 30
+    },
+    {
+      "name": "blindbit-grpc",
+      "service_type": "grpc",
+      "endpoint": "${BLINDBIT_GRPC_ENDPOINT:-127.0.0.1:51051}",
+      "active": true,
+      "timeout": 60,
+      "requests_per_second": 150,
+      "dust_limit": 0
+    },
+    {
       "name": "blindbit",
       "service_type": "http",
-      "endpoint": "http://127.0.0.1:8000/tweak-index",
+      "endpoint": "${BLINDBIT_HTTP_ENDPOINT:-http://127.0.0.1:8000/tweak-index}",
       "headers": {
         "User-Agent": "TweakServiceAuditor/1.0"
       },
-      "active": true,
+      "active": false,
       "requests_per_second": 100
     },
     {
       "name": "esplora-cake",
       "service_type": "socket_rpc",
-      "endpoint": "127.0.0.1:60601",
-      "active": true
+      "endpoint": "${ESPLORA_ENDPOINT:-127.0.0.1:60601}",
+      "active": false
     },
     {
       "name": "electrs",
       "service_type": "socket_rpc",
-      "endpoint": "127.0.0.1:50001",
+      "endpoint": "${ELECTRS_ENDPOINT:-127.0.0.1:50001}",
       "active": false
     },
     {
       "name": "bitcoin",
       "service_type": "rpc",
-      "endpoint": "http://127.0.0.1:38332",
+      "endpoint": "${BITCOIN_RPC_ENDPOINT:-http://127.0.0.1:38332}",
       "cookie_file": "~/work/bitcoin/signet/.cookie",
       "headers": {
         "User-Agent": "TweakServiceAuditor/1.0"
       },
-      "active": true
+      "active": false
     }
   ],
   "service_pairs": [
     {
+      "name": "rbitcoin-vs-blindbit-grpc",
+      "service1": "rbitcoin",
+      "service2": "blindbit-grpc",
+      "active": true
+    },
+    {
       "name": "blindbit-vs-cake",
       "service1": "blindbit",
       "service2": "esplora-cake",
-      "active": true
+      "active": false
     },
     {
       "name": "blindbit-vs-core",
       "service1": "blindbit",
       "service2": "bitcoin",
-      "active": true
+      "active": false
     },
     {
       "name": "cake-vs-core",
@@ -53,8 +75,8 @@
       "active": false
     },
     {
-      "name": "blindbit-vs-test",
-      "service1": "blindbit",
+      "name": "rbitcoin-vs-test",
+      "service1": "rbitcoin",
       "service2": "test_data",
       "active": false
     }
